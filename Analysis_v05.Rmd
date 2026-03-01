@@ -1,0 +1,4100 @@
+---
+  title: "Semi-targeted Metabolomics Analysis using tsatsiki_v05"
+author:
+  - name: Dimitrios Prymidis
+affiliation:
+  - Cologne Universiy
+date: 2025-08-20
+output: 
+  html_document:
+  self_contained: true
+toc: true
+toc_float: true
+toc_depth: 5
+code_folding: show
+vignette: >
+  %\VignetteIndexEntry{Frezza lab Metabolomics Analysis Pipeline R script}
+%\VignetteEngine{knitr::rmarkdown}
+bibliography: bibliography.bib
+editor_options: 
+  chunk_output_type: console
+---
+  
+```{r chunk_setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+
+### Instructions!
+
+# Press Alt+o, and then alt+shift+o , this should minimize your code. Press on the <-> to open specific parts. Now open 0. Settings.
+
+### --- 0. Settings
+# Folders
+In order to run the pipeline, the folder "tsatsiki_vXX" has to be inside the ProjectFolder. The ProjectFolder has to have the name set as 'Year_name_ProjectCode'.
+
+To Load the data you have to create a folder called "Inputs" in the project folder. In that folder there must be 3 and only files.
+1. The SSF, which must be an excel file with the 'SSF' on the file name and it has to have exactly the same structure and the AG.Frezza metabolomics SSF.
+2. The data must be an excel file without the 'SSF' in its name. The data must follow the Tracefinder output format (samples in rows and metabolites in columns). 
+3. The sample run order in the mass spec. This must be the only csv in the folder. It is found in the Raw data folder. The data should be a table with the names of the samples ordered in the first column.
+
+you will need to add input in
+1- 0.2. Set General Parameters: To set up the project folder and folders in general, Thresholds and identifiers.
+2- 0.4. Load Data:  This is to fix the sample names in the data to match the SSF and also the names in the runOrder.
+
+Run each chunk by pressing the the Run Current Chunk on the far right side of the code ------------------------> down here!
+  
+#0.1. Load libraries.
+```{r Load libraries}
+library(tidyverse)
+library(ggfortify)
+library(patchwork)
+library(reshape2) # for melting
+library(ggrepel)  # For smart label positioning
+library(gridExtra) # to combine plots
+library(ggstatsplot) # for boxplots
+library(pheatmap) # Heatmap
+library(EnhancedVolcano) # Volcano 
+library(MetaboAnalystR) # Ora
+library(pathview) # for pathway visualisations
+library(openxlsx) # for TF_errors, excel coloring
+```
+
+#0.2. Set Parameters.
+```{r}
+# Instructions
+
+# In order to run the pipeline, the folder "tsatsiki_vXX" has to be inside the ProjectFolder. The ProjectFolder has to have the name set as 'Year_name_ProjectCode'.
+# Find the project folder in the windows explorer, copy the file path and run the next line. Then, print and save the path in the variable ProjectFolder. )
+
+
+### ------------- Set working directory here ----------- ###
+
+# convert_clip <- function() {gsub("\\\\", "/", readClipboard())}
+# ProjectFolder <- convert_clip()
+# ProjectFolder
+ProjectFolder <- "C:/Users/Dimitrios/Desktop/2025_Sebastian_CoRe"
+
+# Get project Code
+ProjectCode <- strsplit(ProjectFolder, "_")[[1]][[ length(strsplit(ProjectFolder, "_")[[1]])]]
+
+# Set working directory
+setwd(ProjectFolder) 
+
+# Set input folder
+input.dir <-  file.path(ProjectFolder, "Inputs")
+
+# Set Output folders
+output.dir <-  file.path(ProjectFolder,paste(ProjectCode,"Outputs", sep = " "))
+
+# CoRe Analysis
+CoRe = TRUE
+
+### ---------- Set Custom Thresholds ---------- ###
+
+#Metabolite S to N ratio
+SignaltoNoiseRatio_threshold = 3
+
+# Feature NA filtering
+Feature_Filt_Value <- 0.8 # in 10 samples we allow for 2 NAs 
+Feature_Filt_Value_Pools <- 0.8 # If we have 4 pools, we allow 1 NA in 4 which means 75 not 80
+
+# RSd / CV filtering
+Threshold_cv = 30
+
+#Filter outlier values - sd threshold ?
+
+# Set Blank sample rownames identifier. This is used to identify the blank samples from the rownames in the data.
+blank_samp_id <- "BLK|Blank|blank"
+
+# Set up valine-d8 idenrtifier
+valine_pattern_id = "aline-d8|valine-D8"
+
+paste0("#0.2. Set General Parameters Finished!")
+```
+
+#0.3. Set universe.
+```{r}
+Input_name_vec <- c("1,2,3-Propanetricarboxylic acid","1,5-Anhydrosorbitol","1-Methyl nicotinamide","1-Methylhistidine","1-Methylxanthine","2',3' cyclic CMP","2-Aminobenzoic acid","2-Deoxyribose","2-Hydroxyadipic acid","2-Hydroxybutyric acid","2-Hydroxyglutaric acid","2-Hydroxypyridine","2-Oxoadipic acid","2-Oxoglutaric acid","2-Phosphoglyceric acid","3-(3-Hydroxyphenyl)-3-hydroxypropanoic acid","3',5' cyclic AMP","3',5' cyclic GMP","3-Dehydroxycarnitine","3'-Dephospho-CoA","3-Guanidinopropanoic acid","3-Hydroxy-adipic acid","3-Hydroxybutyric acid","3-Hydroxyhippuric acid","3-Hydroxyisobutyric acid","3-Hydroxymethylglutaric acid","3-Methyl pyruvic acid","3-Methylhistamine","3-Methylhistidine","4,5-Dihydroorotic acid","4a-Carbinolamine tetrahydrobiopterin","4-Hydroxyphenyllactic acid","4-Hydroxyphenylpyruvic acid","5-Amino-levulinic acid","5-Hydroxyindoleacetic acid","5-Methylcytosine","5-Phosphoribosylamine","7-Methylguanine","Acetyl-CoA","Adenine","Adenosine","Adenylsuccinic acid","ADP","ADP-glucose","ADP-ribose","AICAR","AIR","Ala-Gln","Ala-Glu","Alanine","Ala-Thr","Ala-Tyr","Allantoin","Alliin","Aminoadipic acid","AMP","Anserine","Arginine","Argininosuccinic acid","Asn-Lys","Asparagine","Aspartic acid","ATP","beta-Alanine","Betaine","Bilirubin","Biliverdin","Biotin","CAR 2:0","CAR 3:0","CAR 3:0;2Me","CAR 4:0;3Me","CAR 4:0;3OH","CAR 4:1;2Me","CAR 5:0","CAR DC3:0","CAR DC4:0","CAR DC5:0","CAR DC6:0","Carbamoylaspartate","Carnitine","Carnosine","CDP","CDP-choline","CDP-Ethanolamine","Choline","Choline phosphate","Citric acid","Citrulline","CMP","CMP-N-acetylneuraminic acid","Coenzyme A","Creatine","Creatinine","CTP","Cyclic ADP-ribose","cyclic CMP","Cys-Gly","Cystathionine","Cysteic acid","Cysteine-S-sulfate","Cysteinylglycine disulfide","Cystine","Cytidine","Cytosine","dAMP","dCMP","Deoxyadenosine","Deoxycytidine","Deoxyguanosine","Deoxyinosine","Deoxyribose 5-phosphate","Deoxyuridine","dGMP","Diethanolamine","Dihydrofolic acid","Dihydrothymine","Dihydrouracil","Dihydroxyacetone phosphate","Dimethylarginine","Dimethylglycine","Dopamine","dTDP","dTDP-glucose","dTMP","dTTP") 
+Input_name_vec <- c(Input_name_vec, "dUMP","dUTP","Ectoine","Epsilon-(gamma-Glutamyl)-lysine","Ergothioneine","Erythronic acid","FAD","FAICAR","FGAM","FGAR","FMN","Folic acid","Formiminoglutamic acid","Fructose 6-phosphate","Fumaric acid","Galacturonic acid","gamma-Glutamylcysteine","gamma-Glutamylglutamic acid","gamma-Glutamylglutamine","gamma-Glutamylhistidine","gamma-Glutamylvaline","GAR","GDP","GDP-L-fucose","Glucaric acid","Glucuronic acid","Glutamic acid","Glutamine","Glutarylglycine","Glutathione oxidized","Glutathione","Gly-Asp","Glyceraldehyde 3-phosphate","Glyceric acid","Glycine","Gly-Ile","Gly-Pro","Gly-Tyr","GMP","GTP","Guanidoacetic acid","Guanine","Guanosine","Heme","Hexose 6-phosphate","Histamine","Histidine","His-Val","Homoarginine","Homocitrulline","Homocysteine","Homoserine","Hydroxykynurenine","4-Hydroxyproline","Hypotaurine","Hypoxanthine","Imidazoleacetic acid","IMP","Indoleacetic acid","Indoxyl sulfate","Inosine","Inositol","Isoleucine","Itaconic acid","Ketoisovaleric acid","Ketoleucine","Kynurenic acid","Kynurenine","Lactic acid","Leucine","Lysine","Lys-Val","Maleic acid","Malic acid","Melatonin","Methionine","Methionine sulfone","Methionine sulfoxide","Methylguanidine","Methylimidazoleacetic acid","Methylmalonic acid","Methylthioadenosine","N(2)-Acetyllysine","N(6)-Methyllysine","N1,N12-Diacetylspermine","N1,N8-Diacetylspermidine","N1-Acetylspermine","N6-Acetyllysine","N-6-Trimethyllysine","N8-Acetylspermidine","N-Acetylalanine","N-Acetylasparagine","N-Acetylaspartic acid","N-Acetyl-Asp-Glu","N-Acetylglutamic acid","N-Acetylglutamine","N-Acetylhistidine","N-Acetylneuraminic acid","N-Acetylornithine","N-Acetylserotonin","N-Acetylthreonine","N-Acetyltryptophan","NAD","NADH","NADP","NADPH","N-Carbamoylaspartic acid","N-Formylglycine","N-Formylphenylalanine","Niacinamide","Nicotinamide ribotide","Nicotinic acid","N-Methylserotonin","N-Methyltryptamine","O-Acetylserine","Ophthalmic acid","Ornithine","Orotic acid","Orotidine","o-Succinylhomoserine","Oxoproline","Pantothenic acid","Phenylalanine","Phosphocreatine","Phosphoenolpyruvic acid","Phosphoserine","Picolinic acid","Pipecolic acid","Porphobilinogen","Proline","Proline betaine","Protoporphyrinogen IX","Pseudouridine","Pterin","Purine","Pyridoxal","Pyridoxine","Pyroglutamic acid","Pyruvic acid","Quinic acid","Quinolinic acid","Riboflavin","Ribonic acid","Ribose 5-phosphate","Ribothymidine","Saccharopine","S-Adenosylhomocysteine","S-Adenosylmethionine","SAICAR","Sarcosine","Sedoheptulose 7-phosphate","Ser-Ala","Serine","Serotonin","sn-Glycero-3-phosphate","Sorbitol","Spermidine","Spermine","S-Succinylglutathione","Succinic acid","Succinyl-CoA","Targinine","Taurine","Thiamine","Threonic acid","Threonine","Thymidine","Thymine","trans-Aconitic acid","Trigonelline","Trimethylamine N-oxide","Tryptamine","Tryptophan","Tyrosine","UDP","UDP-glucose","UDP-glucuronic acid","UDP-N-acetylglucosamine","UMP","Uracil","Urea","Ureidopropionic acid","Uric acid","Uridine","Urocanic acid","UTP","Val-Asp","Val-Glu","Valine","Vitamin C","Xanthine","Xanthosine","Xanthurenic acid","XMP")
+
+
+Super_class_vec <- c("Organic acids","Carbohydrates","Alkaloids","Organic acids","Nucleic acids","Nucleic acids","Benzenoids","Carbohydrates","Fatty Acyls","Fatty Acyls","Fatty Acyls","Alkaloids","Fatty Acyls","Organic acids","Organic acids","Organic acids","Nucleic acids","Nucleic acids","Fatty Acyls","Fatty Acyls","Organic nitrogen compounds","Fatty Acyls","Fatty Acyls","Benzenoids","Fatty Acyls","Fatty Acyls","Fatty Acyls","Organic nitrogen compounds","Organic acids","Organic acids","Organoheterocyclic compounds","Organic acids","Organic acids","Fatty Acyls","Alkaloids","Nucleic acids","Carbohydrates","Nucleic acids","Fatty Acyls","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Organoheterocyclic compounds","Organic acids","Organic acids","Nucleic acids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Nucleic acids","Organic acids","Organic acids","Organoheterocyclic compounds","Organoheterocyclic compounds","Organoheterocyclic compounds","Fatty Acyls","Fatty Acyls","Fatty Acyls","Fatty Acyls","Fatty Acyls","Fatty Acyls","Fatty Acyls","Fatty Acyls","Fatty Acyls","Fatty Acyls","Fatty Acyls","Organic acids","Organic nitrogen compounds","Organic acids","Nucleic acids","Nucleic acids","Nucleic acids","Organic nitrogen compounds","Organic nitrogen compounds","Organic acids","Organic acids","Nucleic acids","Nucleic acids","Nucleic acids","Organic acids","Organoheterocyclic compounds","Nucleic acids","Nucleic acids","Nucleic acids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Carbohydrates","Nucleic acids","Nucleic acids","Organic nitrogen compounds","Organoheterocyclic compounds","Organoheterocyclic compounds","Nucleic acids","Organic acids","Organic acids","Organic acids","Alkaloids","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Organic acids","Organic acids","Carbohydrates","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Organoheterocyclic compounds","Organoheterocyclic compounds","Organic acids","Carbohydrates") 
+Super_class_vec <- c(Super_class_vec,"Organic acids","Carbohydrates","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Nucleic acids","Nucleic acids","Nucleic acids","Carbohydrates","Carbohydrates","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Carbohydrates","Organic acids","Organic acids","Organic acids","Organic acids","Nucleic acids","Nucleic acids","Organic acids","Nucleic acids","Nucleic acids","Organoheterocyclic compounds","Carbohydrates","Alkaloids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Nucleic acids","Alkaloids","Nucleic acids","Alkaloids","Alkaloids","Nucleic acids","Organic oxygen compounds","Organic acids","Fatty Acyls","Fatty Acyls","Organic acids","Alkaloids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Fatty Acyls","Organic acids","Alkaloids","Organic acids","Organic acids","Organic acids","Organic nitrogen compounds","Alkaloids","Fatty Acyls","Nucleic acids","Organic acids","Organic acids","Alkaloids","Alkaloids","Alkaloids","Organic acids","Organic acids","Alkaloids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Carbohydrates","Organic acids","Alkaloids","Organic acids","Organic acids","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Organic acids","Organic acids","Organic acids","Alkaloids","Alkaloids","Alkaloids","Alkaloids","Alkaloids","Organic acids","Organic acids","Organic acids","Nucleic acids","Nucleic acids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Organic acids","Alkaloids","Organic acids","Organic nitrogen compounds","Organic acids","Organic acids","Organoheterocyclic compounds","Nucleic acids","Organoheterocyclic compounds","Nucleic acids","Alkaloids","Alkaloids","Organic acids","Organic acids","Benzenoids","Alkaloids","Organoheterocyclic compounds","Carbohydrates","Carbohydrates","Nucleic acids","Organic acids","Nucleic acids","Nucleic acids","Nucleic acids","Organic acids","Carbohydrates","Organic acids","Organic acids","Alkaloids","Organic acids","Carbohydrates","Alkaloids","Alkaloids","Organic acids","Organic acids","Fatty Acyls","Organic acids","Organic acids","Nucleic acids","Carbohydrates","Organic acids","Nucleic acids","Nucleic acids","Organic acids","Alkaloids","Organic nitrogen compounds","Alkaloids","Organic acids","Organic acids","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Nucleic acids","Organic nitrogen compounds","Organic nitrogen compounds","Nucleic acids","Nucleic acids","Alkaloids","Nucleic acids","Organic acids","Organic acids","Organic acids","Organoheterocyclic compounds","Nucleic acids","Nucleic acids","Alkaloids","Nucleic acids"  )
+
+
+Main_class_vec <- c("Carboxylic acids","Monosaccharides","Pyridine alkaloids","Amino acids and peptides","Purines","Pyrimidines","Benzenes","Monosaccharides","Fatty acids","Fatty acids","Fatty acids","Pyridine alkaloids","Fatty acids","TCA acids","Short-chain acids","Phenylpropanoids","Purines","Purines","Fatty esters","Fatty esters","Guanidines","Fatty acids","Fatty acids","Benzamides","Fatty acids","Fatty acids","Fatty acids","Amines","Amino acids and peptides","Amino acids and peptides","Pterins","Phenylpropanoids","Phenylpropanoids","Fatty acids","Tryptophan alkaloids","Pyrimidines","Monosaccharides","Purines","Fatty esters","Purines","Purines","Purines","Purines","Purines","Purines","Imidazoles","Imidazoles","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Cyclic ureas","Amino acids and peptides","Amino acids and peptides","Purines","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Purines","Amino acids and peptides","Amino acids and peptides","Bilirubins","Bilirubins","Heterocyclic compounds","Fatty esters","Fatty esters","Fatty esters","Fatty esters","Fatty esters","Fatty esters","Fatty esters","Fatty esters","Fatty esters","Fatty esters","Fatty esters","Amino acids and peptides","Carnitines","Amino acids and peptides","Pyrimidines","Pyrimidines","Pyrimidines","Cholines","Cholines","TCA acids","Amino acids and peptides","Pyrimidines","Pyrimidines","Purines","Amino acids and peptides","Azoles","Pyrimidines","Purines","Pyrimidines","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Pyrimidines","Pyrimidines","Purines","Pyrimidines","Purines","Pyrimidines","Purines","Purines","Monosaccharides","Pyrimidines","Purines","Amines","Pterins","Cyclic ureas","Pyrimidines","Short-chain acids","Amino acids and peptides","Amino acids and peptides","Tyrosine alkaloids","Pyrimidines","Pyrimidines","Pyrimidines","Pyrimidines","Pyrimidines","Pyrimidines","Pyrimidines","Amino acids and peptides","Amino acids and peptides","Monosaccharides","Flavins","Imidazoles","Glycinamidine ribonucleotides","Glycinamide ribonucleotides","Alloxazines and isoalloxazines","Pterins","Amino acids and peptides","Monosaccharides","TCA acids","Monosaccharides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Glycinamide ribonucleotides","Purines","Purines","Monosaccharides","Monosaccharides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Short-chain acids","Monosaccharides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Purines","Purines","Amino acids and peptides","Purines","Purines","Metallotetrapyrroles","Monosaccharides")
+Main_class_vec <- c(Main_class_vec,"Histidine alkaloids","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Sulfinic acids","Purines","Histidine alkaloids","Purines","Tryptophan alkaloids","Tryptophan alkaloids","Purines","Alcohols and polyols","Amino acids and peptides","Fatty acids","Fatty acids","Keto acids","Anthranilic acid alkaloids","Amino acids and peptides","Short-chain acids","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Fatty acids","TCA acids","Tryptophan alkaloids","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Guanidines","Histidine alkaloids","Fatty acids","Purines","Amino acids and peptides","Amino acids and peptides","Ornithine alkaloids","Ornithine alkaloids","Ornithine alkaloids","Amino acids and peptides","Amino acids and peptides","Ornithine alkaloids","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Monosaccharides","Amino acids and peptides","Tryptophan alkaloids","Amino acids and peptides","Amino acids and peptides","Nicotinamides","Nicotinamides","Nicotinamides","Nicotinamides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Pyridine alkaloids","Pyridine alkaloids","Pyridine alkaloids","Tryptophan alkaloids","Tryptophan alkaloids","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Pyrimidines","Pyrimidines","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Short-chain acids","Amino acids and peptides","Pyridine alkaloids","Amino acids and peptides","Amines","Amino acids and peptides","Amino acids and peptides","Porphyrins","Pyrimidines","Pterins","Purines","Pyridine alkaloids","Pyridine alkaloids","Amino acids and peptides","Short-chain acids","Benzenes","Pyridine alkaloids","Alloxazines and isoalloxazines","Monosaccharides","Monosaccharides","Pyrimidines","Amino acids and peptides","Purines","Purines","Imidazoles","Amino acids and peptides","Monosaccharides","Amino acids and peptides","Amino acids and peptides","Tryptophan alkaloids","Organic phosphoric acids","Monosaccharides","Ornithine alkaloids","Ornithine alkaloids","Amino acids and peptides","TCA acids","Fatty esters","Amino acids and peptides","Sulfonic acids","Pyrimidines","Monosaccharides","Amino acids and peptides","Pyrimidines","Pyrimidines","Carboxylic acids","Pyridine alkaloids","Amine oxides","Tryptophan alkaloids","Amino acids and peptides","Amino acids and peptides","Pyrimidines","Pyrimidines","Pyrimidines","Pyrimidines","Pyrimidines","Pyrimidines","Organonitrogen compounds","Organonitrogen compounds","Purines","Pyrimidines","Histidine alkaloids","Pyrimidines","Amino acids and peptides","Amino acids and peptides","Amino acids and peptides","Lactones","Purines","Purines","Anthranilic acid alkaloids","Purines" )
+
+Sub_class_vec <- c("Tricarboxylic acids","Hexoses","Nicotinic acid alkaloids","Amino acids","Xanthines","Pyrimidine rNMP","Aminobenzoic acids","Pentoses","Dicarboxylic acids","Hydroxy FA","Dicarboxylic acids","Nicotinic acid alkaloids","Dicarboxylic acids","TCA acids","Short-chain acids","Cinnamic acids","Purine rNMP","Purine rNMP","Acyl carnitines","Acyl CoAs","Guanidines","Dicarboxylic acids","Hydroxy FA","Hippuric acids","Hydroxy FA","Dicarboxylic acids","Oxo FA","Aralkylamines","Amino acids","Amino acids","Biopterins","Cinnamic acids","Cinnamic acids","Amino FA","Indoleacetic acids","Pyrimidones","Amino sugars","Hypoxanthines","Acyl CoAs","Aminopurines","Purine ribonucleosides","Purine rNMP","Purine rNDP","Purine rNDP","Purine rNDP","Imidazole ribonucleosides and ribonucleotides","Imidazole ribonucleosides and ribonucleotides","Dipeptides","Dipeptides","Amino acids","Dipeptides","Dipeptides","Ureides","Amino acids","Amino acids","Purine rNMP","Dipeptides","Amino acids","Amino acids","Dipeptides","Amino acids","Amino acids","Purine rNTP","Amino acids","Amino acids","Bilirubins","Bilirubins","Biotins","Acyl carnitines","Acyl carnitines","Acyl carnitines","Acyl carnitines","Acyl carnitines","Acyl carnitines","Acyl carnitines","Acyl carnitines","Acyl carnitines","Acyl carnitines","Acyl carnitines","Amino acids","Carnitines","Dipeptides","Pyrimidine rNDP","Pyrimidine rNDP","Pyrimidine rNDP","Cholines","Cholines","TCA acids","Amino acids","Pyrimidine rNMP","Pyrimidine ribonucleosides","Other purines","Amino acids","Imidazolines","Pyrimidine rNTP","Purine ribonucleosides","Pyrimidine rNMP","Dipeptides","Amino acids","Amino acids","Amino acids","Dipeptides","Amino acids","Pyrimidine ribonucleosides","Pyrimidones","Purine dNMP","Pyrimidine dNMP","Purine deoxyribonucleosides","Pyrimidine deoxyribonucleosides","Purine deoxyribonucleosides","Purine deoxyribonucleosides","Pentose phosphates","Pyrimidine deoxyribonucleosides","Purine dNMP","1,2-aminoalcohols","Folic acids","Ureides","Other pyrimidines","Short-chain acids","Amino acids","Amino acids","Phenylethylamines","Pyrimidine dNDP","Pyrimidine ribonucleosides","Pyrimidine dNMP","Pyrimidine dNTP","Pyrimidine dNMP","Pyrimidine dNTP","Hydropyrimidines","Dipeptides","Amino acids","Sugar acids","Flavin nucleotides","Imidazole ribonucleosides and ribonucleotides","Glycinamidine ribonucleotides","Glycinamide ribonucleotides","Flavins","Folic acids","Amino acids","Hexose phosphates","TCA acids","Sugar acids","Dipeptides","Dipeptides","Dipeptides","Dipeptides","Dipeptides") 
+Sub_class_vec <- c(Sub_class_vec,"Glycinamide ribonucleotides","Purine rNDP","Purine rNDP","Sugar acids","Sugar acids","Amino acids","Amino acids","Amino acids","Tripeptides","Tripeptides","Dipeptides","Short-chain acids","Sugar acids","Amino acids","Dipeptides","Dipeptides","Dipeptides","Purine rNMP","Purine rNTP","Amino acids","Hypoxanthines","Purine ribonucleosides","Metalloporphyrins","Hexose phosphates","Imidazole alkaloids","Amino acids","Dipeptides","Amino acids","Amino acids","Amino acids","Amino acids","Amino acids","Amino acids","Sulfinic acids","Hypoxanthines","Imidazole alkaloids","Purine rNMP","Indoleacetic acids","Simple indole alkaloids","Purine ribonucleosides","Inositols","Amino acids","Dicarboxylic acids","Branched FA","Short-chain keto acids","Acridone alkaloids","Amino acids","Short-chain acids","Amino acids","Amino acids","Dipeptides","Dicarboxylic acids","TCA acids","Tryptamines","Amino acids","Amino acids","Amino acids","Guanidines","Imidazole alkaloids","Dicarboxylic acids","Purine ribonucleosides","Amino acids","Amino acids","Polyamines","Polyamines","Polyamines","Amino acids","Amino acids","Polyamines","Amino acids","Amino acids","Amino acids","Dipeptides","Amino acids","Amino acids","Amino acids","Sugar acids","Amino acids","Tryptamines","Amino acids","Amino acids","Nicotinamide dinucleotides","Nicotinamide dinucleotides","Nicotinamide dinucleotides","Nicotinamide dinucleotides","Amino acids","Amino acids","Amino acids","Nicotinic acid alkaloids","Nicotinic acid alkaloids","Nicotinic acid alkaloids","Tryptamines","Tryptamines","Amino acids","Tripeptides","Amino acids","Pyrimidine carboxylic acids","Pyrimidine ribonucleosides","Amino acids","Amino acids","Amino acids","Amino acids","Amino acids","Short-chain acids","Amino acids","Nicotinic acid alkaloids","Amino acids","Aralkylamines","Amino acids","Amino acids","Porphyrins","Pyrimidine ribonucleosides","Pterins","Other purines","Nicotinic acid alkaloids","Nicotinic acid alkaloids","Amino acids","Short-chain acids","Hydroxybenzoic acids","Nicotinic acid alkaloids","Flavins","Sugar acids","Pentose phosphates","Pyrimidine ribonucleosides","Amino acids","Other purines","Other purines","Imidazole ribonucleosides and ribonucleotides","Amino acids","Monosaccharide phosphates","Dipeptides","Amino acids","Tryptamines","Organic phosphoric acids","Sugar alcohols","Polyamines","Polyamines","Amino acids","TCA acids","Acyl CoAs","Amino acids","Sulfonic acids","Thiamines","Sugar acids","Amino acids","Pyrimidine deoxyribonucleosides","Other pyrimidines","Tricarboxylic acids","Nicotinic acid alkaloids","Trisubstituted amine oxides","Tryptamines","Amino acids","Amino acids","Pyrimidine rNDP","Pyrimidine rNDP","Pyrimidine rNDP","Pyrimidine rNDP","Pyrimidine rNMP","Other pyrimidines","Ureas","Ureas","Xanthines","Pyrimidine ribonucleosides","Imidazole alkaloids","Pyrimidine rNTP","Dipeptides","Dipeptides","Amino acids","Gamma butyrolactones","Xanthines","Purine ribonucleosides","Acridone alkaloids","Purine rNMP" )
+
+HMDB_ID_vec <- c("HMDB0031193","HMDB0002712","HMDB0000699","HMDB0000001","HMDB0010738","HMDB0011691","HMDB0001123","HMDB0003224","HMDB0000321","HMDB0000008","HMDB0059655","HMDB0013751","HMDB0000225","HMDB0000208","HMDB0003391","HMDB0002643","HMDB0000058","HMDB0001314","HMDB0001161","HMDB0001373","HMDB0013222","HMDB0000345","HMDB0000357","HMDB0006116","HMDB0000023","HMDB0000355","HMDB0000005","HMDB0001861","HMDB0000479","HMDB0000528","HMDB0002215","HMDB0000755","HMDB0000707","HMDB0001149","HMDB0000763","HMDB0002894","HMDB0001128","HMDB0000897","HMDB0001206","HMDB0000034","HMDB0000050","HMDB0000536","HMDB0001341","HMDB0006557","HMDB0001178","HMDB0062179","HMDB0001235","HMDB0028685","HMDB0028686","HMDB0000161","HMDB0028697","HMDB0028699","HMDB0000462","HMDB0301759","NA","HMDB0000045","HMDB0000194","HMDB0000517","HMDB0000052","HMDB0028736","HMDB0000168","HMDB0000191","HMDB0000538","HMDB0000056","HMDB0000043","HMDB0000054","HMDB0001008","HMDB0000030","HMDB0240771","HMDB0062514","HMDB0000736","HMDB0000688","HMDB0013127","HMDB0002366","HMDB0013128","HMDB0002095","HMDB0061717","HMDB0013130","HMDB0061677","HMDB0000828","HMDB0000062","HMDB0000033","HMDB0001546","HMDB0001413","HMDB0001564","HMDB0000097","HMDB0001565","HMDB0000094","HMDB0000904","HMDB0000095","HMDB0001176","HMDB0001423","HMDB0000064","HMDB0000562","HMDB0000082","HMDB0249529","NA","HMDB0000078","HMDB0000099","HMDB0303991","HMDB0000731","HMDB0000709","HMDB0000192","HMDB0000089","HMDB0000630","HMDB0000905","HMDB0001202","HMDB0000101","HMDB0000014","HMDB0000085","HMDB0000071","HMDB0001031","HMDB0000012","HMDB0001044","HMDB0004437","HMDB0001056","HMDB0304210","HMDB0000076","HMDB0001473","HMDB0001539","HMDB0000092","HMDB0000073","HMDB0001274","HMDB0001328","HMDB0001227","HMDB0001342","HMDB0001409","HMDB0001191","HMDB0240650","HMDB0003869","HMDB0003045","HMDB0000613","HMDB0001248","HMDB0001439","HMDB0002305","HMDB0001308","HMDB0001520","HMDB0000121","HMDB0000854","HMDB0003971","HMDB0000134","HMDB0002545","HMDB0001049","HMDB0011737","HMDB0011738","HMDB0029151","HMDB0011172","HMDB0002022","HMDB0001201","HMDB0001095","HMDB0000663","HMDB0000127","HMDB0000148","HMDB0000641","HMDB0000590","HMDB0000125","HMDB0000125","HMDB0028837","HMDB0001112","HMDB0000139","HMDB0000123","HMDB0028844","HMDB0000721","HMDB0028853","HMDB0001397","HMDB0001273","HMDB0000128","HMDB0000132","HMDB0000133","HMDB0003178","HMDB0246205","HMDB0000870","HMDB0000177","HMDB0028898","HMDB0000670","HMDB0000679","HMDB0000742","HMDB0000719","HMDB0011631","HMDB0240251","HMDB0000965","HMDB0000157","HMDB0002024","HMDB0000175","HMDB0000197","HMDB0000682") 
+HMDB_ID_vec <- c(HMDB_ID_vec,"HMDB0000195","NA","HMDB0000172","HMDB0002092","HMDB0000019","HMDB0000695","HMDB0000715","HMDB0000684","HMDB0000190","HMDB0000687","HMDB0000182","HMDB0028964","HMDB0000176","HMDB0000156","HMDB0001389","HMDB0000696","HMDB0062174","HMDB0002005","HMDB0001522","HMDB0002820","HMDB0000202","NA","HMDB0000446","HMDB0002038","HMDB0002172","HMDB0041947","HMDB0001186","HMDB0000206","HMDB0001325","HMDB0002189","HMDB0000766","HMDB0006028","HMDB0000812","HMDB0001067","HMDB0001138","HMDB0006029","HMDB0032055","HMDB0000230","HMDB0003357","HMDB0001238","HMDB0062557","HMDB0013713","HMDB0000902","HMDB0001487","HMDB0304435","HMDB0000221","HMDB0000828","HMDB0255145","HMDB0240317","HMDB0001406","HMDB0000229","HMDB0001488","HMDB0004369","HMDB0004370","HMDB0003011","HMDB0005765","HMDB0000214","HMDB0000226","HMDB0000788","HMDB0255868","NA","HMDB0000210","HMDB0000159","HMDB0001511","HMDB0000263","HMDB0000272","HMDB0002243","HMDB0000716","HMDB0000245","HMDB0000162","HMDB0004827","HMDB0001097","HMDB0000767","HMDB0000802","HMDB0001366","HMDB0001545","HMDB0000239","HMDB0000267","HMDB0000243","HMDB0003072","HMDB0000232","HMDB0000244","HMDB0000867","HMDB0001548","HMDB0000884","HMDB0000279","HMDB0000939","HMDB0001185","HMDB0000797","HMDB0000271","HMDB0258206","HMDB0029032","HMDB0000187","HMDB0000259","HMDB0000126","HMDB0000247","HMDB0001257","HMDB0001256","NA","HMDB0000254","HMDB0001022","HMDB0029416","HMDB0000251","HMDB0000235","HMDB0000943","HMDB0000167","HMDB0000273","HMDB0000262","HMDB0000958","HMDB0000875","HMDB0000925","HMDB0000303","HMDB0000929","HMDB0000158","HMDB0000295","HMDB0000286","HMDB0000935","HMDB0000290","HMDB0000288","HMDB0000300","HMDB0000294","HMDB0000026","HMDB0000289","HMDB0000296","HMDB0000301","HMDB0000285","HMDB0029123","HMDB0029126","HMDB0000883","HMDB0000044","HMDB0000292","HMDB0000299","HMDB0000881","HMDB0001554" )
+
+KEGG_ID_vec <- c("C19806","C07326","C02918","C01152","C16358","C02354","C00108","C01801","C02360","C05984","C02630","C02502","C00322","C00026","C00631","NA","C00575","C00942","C01181","C00882","C03065","NA","C01089","NA","C01188","C03761","C00109","NA","C01152","NA","C00268","C03672","C01179","C00430","C05635","C02376","C03090","C02242","C00024","C00147","C00212","C03794","C00008","C00498","C00301","NA","C03373","NA","NA","C00041","NA","NA","NA","C08265","NA","C00020","C01262","C00062","C03406","NA","C00152","C00049","C00002","C00099","NA","C00486","C00500","C00120","NA","C03017","NA","NA","NA","NA","NA","NA","NA","NA","NA","C00438","C00487","C00386","C00112","C00307","C00570","C00114","NA","C00158","C00327","C00055","C00128","C00010","C00300","C00791","C00063","NA","NA","C01419","C02291","C00506","C05824","NA","C00491","C00475","C00380","C00360","C00239","C00559","C00881","C00330","C05512","C00673","C00526","C00362","C06772","C00415","C00906","C00429","C00111","C03626","C01026","C03758","C00363","C00842","C00364","C00459","C00365","C00460","C06231","NA","C05570","NA","C00016","C04734","C04640","C04376","C00061","C00504","C00439","C00085","C00122","C08348","C00669","C05282","C05283","NA","NA","C03838","C00035","C00325","C00818","C00191","C00025","C00064","NA","C00051","C00051","NA","C00118","C00258","C00037","NA","NA","NA","C00144","C00044","C00581","C00242","C00387","C00032","C02965","C00388","C00135","NA","C01924","C02427","C00155","C00263","C03227","C01015","C00519","C00262","C02835","C00130","C00954","NA","C00294","NA","C00407","C00490","C00141","C00233","C01717","C00328","C00186","C00123","C00047","NA","C01384","C00149","C01598","C00073","NA","NA","C02294","C05828","C02170","NA","C12989","C02728","C03413","NA","C02567","C02727","C03793","C01029","NA","NA","C01042","C12270","C00624","NA","C02997","C19910","C00437","C00978","NA","NA","C00003","C00004","C00006","C00005","NA","NA","NA","C00153","C00455","C00253","C06212","C06213","C00979","NA","C00077","C00295","C01103","C01118","NA","NA","C00079","C02305","C00074","C01005","C10164","C00408","C00931","C00148","C10172","C01079","C02067","C00715","C15587","C00250","C00314","C01879","C00022","C00296","C03722","C00255","C01685","C00117","NA","C00449","C00021","C00019","C04823","C00213","C05382","NA","C00065","C00780","C00093","C00794","C00315","C00750","NA","C00042","C00091","C03884","C00245","C00378","C01620","C00188","C00214","C00178","C02341","C01004","C01104","C00398","C00078","C00082","C00015","C00029","C00167","C00043","C00105","C00106","C00086","C02642","C00366","C00299","C00785","C00075","NA","NA","C00183","C00072","C00385","NA","C02470","C00655") 
+
+
+universe <- data.frame(
+  'Input name' = Input_name_vec,
+  'Super class' = Super_class_vec,
+  'Main class' = Main_class_vec,
+  'Sub class' = Sub_class_vec,
+  'HMDB_ID' = HMDB_ID_vec,
+  'KEGG_ID' = KEGG_ID_vec,
+  stringsAsFactors = FALSE
+)
+
+
+# to make it first get the refmet txt and loadit in r calles universe then 
+# a <- unlist(universe$KEGG_ID) |> as.vector()
+# writeLines(paste0('"', a, '"', collapse = ","), "input_names.csv")
+# open the file with notepad++, copy paste in r
+
+print("#0.3. Set universe finished!")
+```
+
+#0.4. Load Data.
+```{r}
+#1. Load Sample Data
+file_listTF <- list.files(input.dir, pattern = ".xlsx", full.names = TRUE, recursive = TRUE) # make a list of xls files in TF folder folder
+if(sum(grep("~", file_listTF))>0){file_listTF <- file_listTF[-grep("~", file_listTF)]} # remove any open xls
+suppressMessages(data <- readxl::read_excel(file_listTF[grep("ssf", tolower(file_listTF), invert = T)], sheet = 1, col_names = T) |> as.data.frame()) # load data file
+rownames(data) <- data[[1]]   # set first column as row names
+data <- data[, -1]    # Remove first col
+
+data[] <- lapply(data, function(col) {as.numeric(gsub(" ", "", col)) })# remove spaces and make numeric
+if(unique(sapply(data, is.numeric))==FALSE){warning("Input data are NOT numeric!!")} # Check if data are indeed numeric
+
+data[is.na(data)] <- 0 # Set all NAs to zeros
+
+
+########  ### ### CHANGE DATA ROWNAMES HERE ------------
+
+# Run each row above up to here and then make changes to the raw names so that the ones in the SSF match exactly the rownames of the data.
+
+#stop
+
+#2. Load Sample SSF
+suppressMessages(SSF <- readxl::read_excel(file_listTF[grep("ssf", tolower(file_listTF))], sheet = 1, col_names = T) %>% as.data.frame()) # load SSF file
+sel.col <- grep("Vial Identifier", SSF, ignore.case = FALSE, value = FALSE)  # find the column we want
+sel.row <- grep("Vial Identifier", t(SSF[,grep("Vial Identifier", SSF, ignore.case = FALSE, value = FALSE)]), ignore.case = FALSE, value = FALSE)  # find the row we want
+SSF <- SSF[sel.row:length(as.data.frame(t(SSF))),sel.col:ncol(SSF)] # subset the data
+if (sum(is.na(SSF[,1])) != 0){  SSF <- SSF[1:min(which(is.na(SSF[,1]))) - 1,]  } # Remove NA rows in the end
+colnames(SSF) <- SSF[1,] # make first row into col names
+SSF <- SSF[-c(1:4),] # remove the first 4 rows with information
+if(sum(grep("Example", SSF[1,]))>0 ){
+  SSF <- SSF[-1,] # remove the first 4 rows with information
+}
+rownames(SSF) <- SSF[,1]  # make 1st column into row names
+SSF <- SSF[,-1] # delete fist column
+colnames(SSF)[1] <- "Conditions"
+
+SSF$Conditions <- factor(SSF$Conditions, levels = unique(SSF$Conditions))
+
+########  ### ### CHANGE SSF ROWNAMES HERE ---------------
+
+
+# Run each row above up to here and then make changes to the raw names so that the ones in the SSF match exactly the rownames of the data.
+
+#stop
+
+
+# Add extra samples in the SSF
+# Remove any pools or blanks from the SSF
+SSF <- SSF[!grepl("pool", tolower(rownames(SSF)),ignore.case=TRUE ) ,] 
+SSF <- SSF[!grepl(blank_samp_id, tolower(rownames(SSF)),ignore.case=TRUE ) ,] 
+
+
+# Add pool samples back in the SSF
+Pool_metadata <- data.frame(matrix(NA, nrow = sum(grepl("Pool",rownames(data),ignore.case=TRUE)), ncol = ncol(SSF))) # Name a dataframe for pool metadata
+colnames(Pool_metadata) <- colnames(SSF) # add colnames from metadata
+rownames(Pool_metadata) <-  rownames(data)[grepl("Pool", rownames(data),ignore.case=TRUE)] # add rownames of the pool samples from the data
+Pool_metadata$Conditions <- rownames(Pool_metadata)
+Pool_metadata$Conditions <-   "Pool"
+
+
+# Add Blank samples back in the SSF
+Blank_metadata <- data.frame(matrix(NA, nrow = sum(grepl(blank_samp_id,rownames(data),ignore.case=TRUE)), ncol = ncol(SSF))) # Name a dataframe for pool metadata
+colnames(Blank_metadata) <- colnames(SSF) # add colnames from metadata
+rownames(Blank_metadata) <-  rownames(data)[grepl(blank_samp_id, rownames(data),ignore.case=TRUE)] # add rownames of the pool samples from the data
+Blank_metadata$Conditions <- rownames(Blank_metadata)
+Blank_metadata$Conditions <- "Blank"
+
+
+# Add in a column multiple thingis
+# Pool_metadata$`Sample Matrix` <- dplyr::case_when(
+#   grepl("Heart", rownames(Pool_metadata), ignore.case = TRUE) ~ "HEART",
+#   grepl("Kidney", rownames(Pool_metadata), ignore.case = TRUE) ~ "Kidney",
+#   grepl("SI", rownames(Pool_metadata), ignore.case = TRUE) ~ "small intestine",
+#   grepl("Muscle", rownames(Pool_metadata), ignore.case = TRUE) ~ "MUSCLE",
+#   TRUE ~ "UNKNOWN" # Default value if no match
+# )
+
+#  merge the metadata with the pool metadata
+SSF <- rbind(SSF, Pool_metadata, Blank_metadata) 
+rm(Pool_metadata,Blank_metadata)
+
+# Subset SSF to keep only sample names that exist in the data, as actual sample number might be different from the originally planned.
+SSF <- SSF[rownames(data), , drop = FALSE]
+
+# Extract growth vector
+if(CoRe==TRUE){
+  ssf_for_growth_factor <- SSF %>% select(Conditions, `Cell Number at Time Zero`  ,`Cell Count at Experimental End Point` )
+  ssf_for_growth_factor$`Cell Number at Time Zero` <- 1
+  ssf_for_growth_factor <- ssf_for_growth_factor[complete.cases(ssf_for_growth_factor),]
+
+  ssf_for_growth_factor[, 2:3] <- lapply(ssf_for_growth_factor[, 2:3], as.numeric)
+  growth_factor <- ssf_for_growth_factor %>%
+  mutate(GrowthFactor = `Cell Count at Experimental End Point` /
+                   `Cell Number at Time Zero` )%>%
+  group_by(Conditions) %>%
+  summarise(GrowthFactor = unique(GrowthFactor), .groups = "drop")
+  
+  growth_factor
+}
+
+# Keep only columns that are NOT all NA
+SSF <- SSF[, colSums(!is.na(SSF)) > 0]
+
+
+#3. Sample Run Order
+file_listRunOrder <- list.files(input.dir, pattern = ".csv",recursive = TRUE, full.names = TRUE) # get all csv files in the raw data folder and subfolders
+if(sum(grep("~", file_listRunOrder))>0){file_listRunOrder <- file_listRunOrder[-grep("~", file_listRunOrder)]} # remove open xls
+
+RandomizedSamples <- read.csv(file_listRunOrder) %>% as.data.frame() 
+colnames(RandomizedSamples) <- RandomizedSamples[1,] # make first row into col names
+RandomizedSamples <- RandomizedSamples[-c(1),] # remove the first 4 rows with information
+RandomizedSamples <- RandomizedSamples[,1]
+
+
+
+### ### ### Here make changes to the Run Order --------------
+
+# RandomizedSamples[grep(blank_samp_id, RandomizedSamples)][1:length( rownames(data)[grep(blank_samp_id, rownames(data))])] <- rownames(data)[grep(blank_samp_id, rownames(data))]
+#stop
+
+
+RandomizedSamples <- RandomizedSamples[RandomizedSamples %in% rownames(SSF)]
+
+SSF$RunOrder <- match(rownames(SSF), RandomizedSamples)
+SSF$RunOrder  <- SSF$RunOrder - min(SSF$RunOrder)+1
+rm(RandomizedSamples)
+
+
+# Remove first 5 pools( Pools that are used to condition the LC column) as they can be incosistent
+if(length(grep("PoolB", rownames(data)))>1){
+  starting_pools_to_remove <- c("PoolA00", "PoolA01" , "PoolA02")#, "PoolA03" )
+}
+if(length(grep("PoolB", rownames(data)))>1){
+  starting_pools_to_remove <- c("PoolB00", "PoolB01" , "PoolB02")#, "PoolB03" )
+}
+if(length(grep("PoolC", rownames(data)))>1){
+  starting_pools_to_remove <- c("PoolC00", "PoolC01" , "PoolC02")#, "PoolC03" )
+}
+
+
+rownames(data)
+
+data <- data[-grep(paste(starting_pools_to_remove, collapse="|"), rownames(data)),]
+
+# Subset SSF to keep only sample names that exist in the data, as actual sample number might be different from the originally planned.
+SSF <- SSF[rownames(data), , drop = FALSE]
+# Keep only columns that are NOT all NA
+SSF <- SSF[, colSums(!is.na(SSF)) > 0]
+
+
+SSF_raw <- SSF
+data_raw <- data
+# Input checks, if all data have the same samples. 
+message("All samples in SSF found in data: ", all(rownames(SSF) %in% rownames(data)))
+message("All samples in data found in SSF: ", all(rownames(data) %in% rownames(SSF)))
+
+### ----- Check the data ----- ###
+# Check the columns that have NAs
+check <- data[-grep(blank_samp_id, tolower(rownames(data))),]
+Check <- check %>% select( names(check)[colSums(check==0) > 0])
+
+message("There are ",length(colnames(Check)) , " metabolites with missing values." )
+# check sample groups
+message("Number of pool samples is:", length(grep("pool", tolower(SSF$Conditions))))
+message("Number of the smallest sample group is: ",SSF %>% count(Conditions) %>% arrange(n) %>% slice(1)%>% select(n))
+
+print("#0.4. Load Data finished!")
+```
+
+
+#0.5. Set colors.
+```{r}
+
+### ---------- Create Custom Colors for plotting ---------- ###
+# Check sample groups to select colors.
+length(unique(SSF$Conditions) )
+unique(SSF$Conditions)
+
+# Create customColors table
+customColors <- data.frame(
+  Conditions = unique(SSF$Conditions),
+  # colors <- c("red", "blue", "green", "orange", "purple", "cyan", "magenta","white, "grey")[1:length(unique(SSF$Conditions))]
+  Color = c( "#8eb841", "red", "blue", "grey","black", "#3c4f1b", "red","black","lightblue", "blue", "darkblue", "#bdd78d", "#8eb841", "#3c4f1b", "red" ,"grey")[1:length(unique(SSF$Conditions))]
+)
+customColorsBox <- customColors
+
+# Map colors to SSF without merging
+SSF$Color <- customColors$Color[match(SSF$Conditions, customColors$Conditions)]
+SSF_raw <- SSF
+
+# Set the Media_sample and their controls.
+if(CoRe==T){
+  media_sample_names <- rownames(SSF)[-grep("Ctrl", rownames(SSF))]
+  media_control_names <- c(rownames(SSF)[grep("Ctrl", rownames(SSF))],rownames(SSF)[grep("Blank", rownames(SSF))])
+}
+print("#0.5. Set colors!")
+```
+
+#0.6. Load helper functions.
+```{r}
+# res <- make_pca_grid(data, SSF, out_dir = Data_cleaning_dir)
+make_pca_grid <- function(data, SSF,
+                          add_to_name = NULL,
+                          project_code = ProjectCode,
+                          color_col = "Conditions",
+                          fig_size_cm = c(60, 40)) {
+  
+  suppressMessages(suppressWarnings({
+    
+    PCA_dir <- file.path(output.dir, "PCA_plots")
+    if (!dir.exists(PCA_dir)) dir.create(PCA_dir, recursive = TRUE)
+    
+    # labels
+    if (!is.null(project_code)) {
+      SSF$Label <- sub(paste0("^", project_code, "_"), "", rownames(SSF))
+    } else {
+      SSF$Label <- rownames(SSF)
+    }
+    
+    # PCA input: copy, fill NAs with 0, drop zero-variance features
+    X <- data
+    X[is.na(X)] <- 0
+    nzv <- apply(X, 2, sd) > 0
+    if (!all(nzv)) X <- X[, nzv, drop = FALSE]
+    if (ncol(X) < 2) stop("Not enough non-zero-variance features for PCA.")
+    
+    # PCA
+    pca_res <- prcomp(X, scale. = TRUE)
+    n_pc_use <- min(5, ncol(pca_res$x))
+    
+    # palette from SSF if available
+    pal <- NULL
+    if ("Color" %in% colnames(SSF) && color_col %in% colnames(SSF)) {
+      pal_df <- unique(SSF[, c(color_col, "Color")])
+      pal <- setNames(pal_df$Color, pal_df[[color_col]])
+    }
+    
+    # builder
+    build_grid <- function(label_points = FALSE) {
+      plots <- vector("list", n_pc_use * n_pc_use)
+      k <- 1
+      for (i in seq_len(n_pc_use)) {
+        for (j in seq_len(n_pc_use)) {
+          if (i != j) {
+            p <- autoplot(
+              pca_res, data = SSF, x = i, y = j,
+              colour = color_col, size = 2, alpha = 0.8, loadings = FALSE
+            ) +
+              theme_classic() +
+              ggtitle(paste("PC", i, "vs PC", j)) +
+              geom_hline(yintercept = 0, color = "black", linewidth = 0.1) +
+              geom_vline(xintercept = 0, color = "black", linewidth = 0.1)
+            if (!is.null(pal)) p <- p + scale_color_manual(values = pal)
+            if (label_points) p <- p + ggrepel::geom_text_repel(aes(label = Label), size = 2.5)
+          } else {
+            p <- ggplot() + theme_void() + ggtitle(paste0("PC", i, " vs ", j))
+          }
+          plots[[k]] <- p; k <- k + 1
+        }
+      }
+      patchwork::wrap_plots(plots, ncol = n_pc_use)
+    }
+    
+    # build + save
+    p_plain   <- build_grid(FALSE)
+    p_labeled <- build_grid(TRUE)
+    
+    ggsave(file.path(PCA_dir, paste0(add_to_name, "__PCA.svg")),
+           plot = p_plain, width = fig_size_cm[1], height = fig_size_cm[2], units = "cm")
+    ggsave(file.path(PCA_dir,  paste0(add_to_name, "__PCA_Labeled.svg")),
+           plot = p_labeled, width = fig_size_cm[1], height = fig_size_cm[2], units = "cm")
+    
+    invisible(list(plain = p_plain, labeled = p_labeled, pca = pca_res))
+  }))
+}
+
+make_signal_drift_reports <- function(data, SSF,
+                                      add_to_name = NULL,
+                                      project_code = ProjectCode,
+                                      valine_pattern = valine_pattern_id) {
+  
+  # silence warnings/messages inside this function
+  old_warn <- getOption("warn"); options(warn = -1)
+  on.exit(options(warn = old_warn), add = TRUE)
+  
+  suppressMessages(suppressWarnings({
+    
+    SignalDrift_dir <- file.path(output.dir, "SignalDrift")
+    if (!dir.exists(SignalDrift_dir)) dir.create(SignalDrift_dir, recursive = TRUE)
+    
+    # Palette from SSF
+    pal_df <- unique(SSF[, c("Conditions","Color")])
+    customColors <- setNames(pal_df$Color, pal_df$Conditions)
+    
+    # Pool label (character)
+    v_cond <- as.character(SSF$Conditions)
+    pool_label <- {
+      u <- unique(v_cond[grepl("pool", tolower(v_cond))])
+      if (length(u)) u[1] else NA_character_
+    }
+    
+    # Order by RunOrder
+    valid_samples <- rownames(SSF)[order(SSF$RunOrder)]
+    
+    # ---- Prepare Drift Data ----
+    Drift_data <- merge(SSF %>% dplyr::select(Conditions), data, by = 0, sort = FALSE)
+    colnames(Drift_data)[1] <- "File.Name"
+    rownames(Drift_data) <- Drift_data$File.Name
+    
+    Drift_data_ordered <- Drift_data[match(valid_samples, Drift_data$File.Name), , drop = FALSE]
+    Drift_data_ordered <- Drift_data_ordered[!is.na(rownames(Drift_data_ordered)), ]
+    Drift_data_ordered$File.Name <- NULL
+    Drift_data_ordered[, -1] <- sapply(Drift_data_ordered[, -1], as.numeric)
+    
+    row_medians <- matrixStats::rowMedians(as.matrix(Drift_data_ordered[, -1]), na.rm = TRUE)
+    row_sums    <- rowSums(as.matrix(Drift_data_ordered[, -1]), na.rm = TRUE)
+    
+    plotdata <- data.frame(SampleMedian = row_medians,
+                           TIC = row_sums,
+                           SampleGroup = Drift_data_ordered$Conditions) %>%
+      tibble::rownames_to_column("RowNames")
+    plotdata$RowNames <- factor(plotdata$RowNames, levels = plotdata$RowNames)
+    plotdata$Order <- seq_len(nrow(plotdata))
+    
+    # palette for used groups
+    pal_for <- function(groups) {
+      used <- intersect(names(customColors), unique(as.character(groups)))
+      customColors[used]
+    }
+    
+    # file prefix
+    prefix <- if (!is.null(add_to_name) && nzchar(add_to_name)) paste0(add_to_name, "__") else ""
+    
+    # ---- Plot helper ----
+    make_drift_plot <- function(df, yvar, ylab, title, filename) {
+      pal_use <- pal_for(df$SampleGroup)
+      df$SampleGroup <- factor(as.character(df$SampleGroup), levels = names(pal_use))
+      pool_df <- if (!is.na(pool_label)) df[as.character(df$SampleGroup) == pool_label, , drop = FALSE] else NULL
+      
+      p <- ggplot(df, aes(x = RowNames, y = .data[[yvar]], fill = SampleGroup)) +
+        geom_col(position = "dodge") +
+        geom_smooth(
+          data = pool_df,
+          aes(x = Order, y = .data[[yvar]]),
+          method = "lm", se = FALSE, color = "red", inherit.aes = FALSE
+        ) +
+        scale_fill_manual(values = pal_use, drop = FALSE) +
+        labs(title = title, x = "Samples by acquirement order", y = ylab) +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 40, hjust = 1),
+              plot.title = element_text(size = 22))
+      
+      ggsave(file.path(SignalDrift_dir, paste0(prefix, filename)),
+             plot = p, width = 10, height = 8)
+    }
+    
+    # ---- Signal Drift Plots ----
+    make_drift_plot(plotdata, "SampleMedian", "Sample Medians",
+                    "Signal drift, Sample Median", "SignalDrift_Median_SampleGroup.svg")
+    make_drift_plot(plotdata, "TIC", "Sample TIC",
+                    "Signal drift, TIC", "SignalDrift_TIC_SampleGroup.svg")
+    
+    plotdata_pool <- transform(plotdata,
+                               SampleGroup = if (!is.na(pool_label)) ifelse(SampleGroup == pool_label, pool_label, "Sample") else "Sample")
+    make_drift_plot(plotdata_pool, "SampleMedian", "Sample Medians",
+                    "Signal drift, Median, Pool Samples", "SignalDrift_Median_PoolSamples.svg")
+    make_drift_plot(plotdata_pool, "TIC", "Sample TIC",
+                    "Signal drift, TIC, Pool Samples", "SignalDrift_TIC_PoolSamples.svg")
+    
+    # ---- Valine-d8 block (optional; runs only if found) ----
+    valine_idx <- grep(valine_pattern, tolower(colnames(Drift_data_ordered)), ignore.case = TRUE)
+    valine_done <- FALSE
+    
+    if (length(valine_idx) > 0) {
+      valine_col <- colnames(Drift_data_ordered)[valine_idx[1]]
+      plotdataIS <- data.frame(
+        ValineIS    = Drift_data_ordered[[valine_col]],
+        SampleGroup = Drift_data_ordered$Conditions,
+        RowNames    = rownames(Drift_data_ordered),
+        check.names = FALSE
+      )
+      plotdataIS$Index <- seq_len(nrow(plotdataIS))
+      plotdataIS$RowNames <- factor(plotdataIS$RowNames,
+                                    levels = rownames(Drift_data_ordered), ordered = TRUE)
+      pal_use <- pal_for(plotdataIS$SampleGroup)
+      
+      val_cv <- function(x) round(100 * sd(x, na.rm = TRUE) / mean(x, na.rm = TRUE), 2)
+      ValSampCV <- val_cv(plotdataIS$ValineIS)
+      ValPoolCV <- if (!is.na(pool_label)) val_cv(plotdataIS$ValineIS[plotdataIS$SampleGroup == pool_label]) else NA_real_
+      
+      p_val <- ggplot(plotdataIS, aes(x = RowNames, y = ValineIS, fill = SampleGroup)) +
+        geom_col(position = "dodge") +
+        geom_smooth(aes(x = Index, y = ValineIS), method = "lm", se = FALSE, color = "red", inherit.aes = FALSE) +
+        scale_y_continuous(limits = c(0, NA)) +
+        scale_fill_manual(values = pal_use, drop = FALSE) +
+        labs(title = paste0("Signal drift, ", valine_col, " (IS)"),
+             subtitle = paste("PoolCV =", ValPoolCV, ", SampleCV =", ValSampCV),
+             x = "Samples by acquirement order", y = "Peak Area") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 40, hjust = 1),
+              plot.title = element_text(size = 22))
+      ggsave(file.path(SignalDrift_dir, paste0(add_to_name, "_SignalDrift_Valine-d8(IS).svg")),
+             plot = p_val, width = 12, height = 10)
+      
+      # Correlations
+      plotdata_combined <- merge(plotdata, plotdataIS %>% dplyr::select(-SampleGroup), by = "RowNames")
+      cor_TIC_valine    <- cor(plotdata_combined$TIC,          plotdata_combined$ValineIS, use = "complete.obs")
+      cor_median_valine <- cor(plotdata_combined$SampleMedian, plotdata_combined$ValineIS, use = "complete.obs")
+      
+      # Extraction Buffer (optional)
+      eb_col <- grep("^Extraction\\s*Buffer$", names(SSF), ignore.case = TRUE, value = TRUE)
+      if (length(eb_col) == 1) {
+        plotdata_combined$ExtractionBuffer <- SSF[match(plotdata_combined$RowNames, rownames(SSF)), eb_col]
+        plotdata_combined$ExtractionBuffer <- as.numeric(plotdata_combined$ExtractionBuffer)
+        plotdata_combined$ExtractionBuffer[is.na(plotdata_combined$ExtractionBuffer)] <-
+          mean(plotdata_combined$ExtractionBuffer, na.rm = TRUE)
+        cor_ExtrBuffer_valine <- cor(plotdata_combined$ExtractionBuffer, plotdata_combined$ValineIS, use = "complete.obs")
+      } else {
+        plotdata_combined$ExtractionBuffer <- NA_real_
+        cor_ExtrBuffer_valine <- NA_real_
+      }
+      
+      p1 <- ggplot(plotdata_combined, aes(x = ValineIS, y = TIC, color = SampleGroup)) +
+        geom_point(size = 3) + geom_smooth(method = "lm", se = FALSE, color = "black") +
+        scale_color_manual(values = pal_for(plotdata_combined$SampleGroup), drop = FALSE) +
+        labs(title = paste("TIC vs", valine_col, "(r =", round(cor_TIC_valine, 3), ")"),
+             x = paste(valine_col, "(IS Peak Area)"), y = "TIC") + theme_minimal()
+      
+      p2 <- ggplot(plotdata_combined, aes(x = ValineIS, y = SampleMedian, color = SampleGroup)) +
+        geom_point(size = 3) + geom_smooth(method = "lm", se = FALSE, color = "black") +
+        scale_color_manual(values = pal_for(plotdata_combined$SampleGroup), drop = FALSE) +
+        labs(title = paste("Sample Median vs", valine_col, "(r =", round(cor_median_valine, 3), ")"),
+             x = paste(valine_col, "(IS Peak Area)"), y = "Sample Median") + theme_minimal()
+      
+      p3 <- ggplot(plotdata_combined, aes(x = ValineIS, y = ExtractionBuffer, color = SampleGroup)) +
+        geom_point(size = 3) + geom_smooth(method = "lm", se = FALSE, color = "black") +
+        scale_color_manual(values = pal_for(plotdata_combined$SampleGroup), drop = FALSE) +
+        labs(title = paste("Extraction Buffer vs", valine_col, "(r =", round(cor_ExtrBuffer_valine, 3), ")"),
+             x = paste(valine_col, "(IS Peak Area)"), y = "Extraction Buffer") + theme_minimal()
+      
+      plotdata_combined[plotdata_combined==0] <- 1
+      cor_matrix <- plotdata_combined %>%
+        dplyr::select(TIC, SampleMedian, ValineIS) %>% as.data.frame() %>%
+        stats::cor(use = "complete.obs")
+      
+      cor_df <- reshape2::melt(cor_matrix)
+      colnames(cor_df) <- c("Var1", "Var2", "Correlation")
+      
+      p4 <- ggplot(cor_df, aes(x = Var1, y = Var2, fill = Correlation)) +
+        geom_tile(color = "white") +
+        geom_text(aes(label = round(Correlation, 2)), color = "black", size = 5) +
+        scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1, 1)) +
+        theme_minimal() + labs(title = "Correlation Matrix") +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+      
+      p_all <- (p1 | p2 | p3 | p4)
+      ggsave(file.path(SignalDrift_dir, paste0(add_to_name, "_Correlation_TIC_Median_ValineIS.svg")),
+             plot = p_all, width = 24, height = 6)
+      
+      # Feature-wise correlations
+      valine_vector <- Drift_data_ordered[, valine_col]
+      valine_vector <- valine_vector[match(rownames(data), rownames(Drift_data_ordered))]
+      
+      feature_cor <- sapply(data, function(v) cor(v, valine_vector , use = "complete.obs"))
+      feature_cor_df <- data.frame(Feature = names(feature_cor),
+                                   CorrelationWithValineIS = feature_cor) %>%
+        dplyr::arrange(CorrelationWithValineIS)
+      
+      top_neg <- head(feature_cor_df[order(feature_cor_df$CorrelationWithValineIS), ], 20) %>%
+        dplyr::mutate(Feature = gsub("\\*", "", Feature))
+      top_pos <- tail(feature_cor_df[order(feature_cor_df$CorrelationWithValineIS), ], 20) %>%
+        dplyr::mutate(Feature = gsub("\\*", "", Feature))
+      
+      if (exists("ProjectFolder")) {
+        rt_file <- file.path(ProjectFolder, "tsatsiki_v03_media/FINAL_TF_LIST.xlsx")
+        if (file.exists(rt_file) && requireNamespace("readxl", quietly = TRUE)) {
+          featRTs <- readxl::read_excel(rt_file)
+          top_neg <- dplyr::left_join(top_neg, featRTs %>% dplyr::select(`Standardized name`, RT),
+                                      by = c("Feature" = "Standardized name")) %>%
+            dplyr::mutate(Feature = paste0(Feature, " (RT=", round(RT, 2), ")"))
+          top_pos <- dplyr::left_join(top_pos, featRTs %>% dplyr::select(`Standardized name`, RT),
+                                      by = c("Feature" = "Standardized name")) %>%
+            dplyr::mutate(Feature = paste0(Feature, " (RT=", round(RT, 2), ")"))
+        }
+      }
+      
+      p_hist <- ggplot(feature_cor_df, aes(x = CorrelationWithValineIS)) +
+        geom_histogram(bins = 50, fill = "steelblue", color = "white") +
+        labs(title = paste("Feature-wise Correlation with", valine_col),
+             x = "Pearson Correlation", y = "Feature Count") +
+        theme_minimal()
+      
+      p_neg <- ggplot(top_neg, aes(x = reorder(Feature, CorrelationWithValineIS),
+                                   y = CorrelationWithValineIS)) +
+        geom_col(fill = "firebrick") + coord_flip() +
+        labs(title = "Top 20 Most Negatively Correlated Features",
+             x = "Feature", y = "Correlation") + theme_minimal()
+      
+      p_pos <- ggplot(top_pos, aes(x = reorder(Feature, CorrelationWithValineIS),
+                                   y = CorrelationWithValineIS)) +
+        geom_col(fill = "darkgreen") + coord_flip() +
+        labs(title = "Top 20 Most Positively Correlated Features",
+             x = "Feature", y = "Correlation") + theme_minimal()
+      
+      combined_plot <- p_hist / (p_neg | p_pos)
+      ggsave(file.path(SignalDrift_dir, paste0(add_to_name, "_Feature_wise_Valine-d8_Correlations.svg")),
+             plot = combined_plot, width = 18, height = 10)
+      
+      valine_done <- TRUE
+    } else {
+      valine_done <- FALSE
+    }
+    
+    invisible(list(
+      outdir = SignalDrift_dir,
+      pool_label = pool_label,
+      valine_found = valine_done
+    ))
+  }))
+}
+print("#0.6. Load helper functions!")
+```
+
+```{r}
+# ───────────────────────────────────────────────
+### HELPER FUNCTIONS: PCA + SIGNAL DRIFT PLOTS --
+
+
+# PCA grid (pairwise PC plots + labeled version)
+make_pca_grid <- function(data, SSF,
+                          add_to_name   = NULL,
+                          project_code  = ProjectCode,
+                          color_col     = "Conditions",
+                          fig_size_cm   = c(60, 40)) {
+
+  suppressMessages(suppressWarnings({
+
+    # ── Output folder ───────────────────────────
+    PCA_dir <- file.path(output.dir, "PCA_plots")
+    if (!dir.exists(PCA_dir)) dir.create(PCA_dir, recursive = TRUE)
+
+    # ── Labels (remove leading "ProjectCode_" if present) ───────────────
+    if (!is.null(project_code) && nzchar(project_code)) {
+      SSF$Label <- sub(paste0("^", project_code, "_"), "", rownames(SSF))
+    } else {
+      SSF$Label <- rownames(SSF)
+    }
+
+    # ── PCA input (safe) ────────────────────────
+    X <- data
+    X[is.na(X)] <- 0
+
+    # Drop zero-variance features
+    nzv <- apply(X, 2, sd, na.rm = TRUE) > 0
+    if (!all(nzv)) X <- X[, nzv, drop = FALSE]
+    if (ncol(X) < 2) stop("Not enough non-zero-variance features for PCA.")
+
+    # ── Run PCA ─────────────────────────────────
+    pca_res  <- prcomp(X, scale. = TRUE)
+    n_pc_use <- min(5, ncol(pca_res$x))
+
+    # ── Palette from SSF (if Color column exists) ───────────────────────
+    pal <- NULL
+    if ("Color" %in% colnames(SSF) && color_col %in% colnames(SSF)) {
+      pal_df <- unique(SSF[, c(color_col, "Color")])
+      pal <- setNames(pal_df$Color, pal_df[[color_col]])
+    }
+
+    # ── Plot builder ────────────────────────────
+    build_grid <- function(label_points = FALSE) {
+
+      plots <- vector("list", n_pc_use * n_pc_use)
+      k <- 1
+
+      for (i in seq_len(n_pc_use)) {
+        for (j in seq_len(n_pc_use)) {
+
+          if (i != j) {
+
+            p <- autoplot(
+              pca_res, data = SSF, x = i, y = j,
+              colour = color_col, size = 2, alpha = 0.8, loadings = FALSE
+            ) +
+              theme_classic() +
+              ggtitle(paste("PC", i, "vs PC", j)) +
+              geom_hline(yintercept = 0, color = "black", linewidth = 0.1) +
+              geom_vline(xintercept = 0, color = "black", linewidth = 0.1)
+
+            if (!is.null(pal)) p <- p + scale_color_manual(values = pal)
+            if (label_points) {
+              p <- p + ggrepel::geom_text_repel(aes(label = Label), size = 2.5)
+            }
+
+          } else {
+            # diagonal cell: keep empty to make the grid readable
+            p <- ggplot() + theme_void()
+          }
+
+          plots[[k]] <- p
+          k <- k + 1
+        }
+      }
+
+      patchwork::wrap_plots(plots, ncol = n_pc_use)
+    }
+
+    # ── Build + save ────────────────────────────
+    prefix <- if (!is.null(add_to_name) && nzchar(add_to_name)) paste0(add_to_name, "__") else ""
+
+    p_plain   <- build_grid(FALSE)
+    p_labeled <- build_grid(TRUE)
+
+    ggsave(
+      filename = file.path(PCA_dir, paste0(prefix, "PCA.svg")),
+      plot = p_plain, width = fig_size_cm[1], height = fig_size_cm[2], units = "cm"
+    )
+
+    ggsave(
+      filename = file.path(PCA_dir, paste0(prefix, "PCA_Labeled.svg")),
+      plot = p_labeled, width = fig_size_cm[1], height = fig_size_cm[2], units = "cm"
+    )
+
+    invisible(list(plain = p_plain, labeled = p_labeled, pca = pca_res))
+  }))
+}
+
+
+# Signal drift reports (median + TIC, with optional Valine-d8 diagnostics)
+make_signal_drift_reports <- function(data, SSF,
+                                      add_to_name     = NULL,
+                                      project_code    = ProjectCode,
+                                      valine_pattern  = valine_pattern_id) {
+
+  # Silence warnings inside (without changing global state permanently)
+  old_warn <- getOption("warn")
+  options(warn = -1)
+  on.exit(options(warn = old_warn), add = TRUE)
+
+  suppressMessages(suppressWarnings({
+
+    # ── Output folder ───────────────────────────
+    SignalDrift_dir <- file.path(output.dir, "SignalDrift")
+    if (!dir.exists(SignalDrift_dir)) dir.create(SignalDrift_dir, recursive = TRUE)
+
+    # ── Palette from SSF ────────────────────────
+    pal_df <- unique(SSF[, c("Conditions", "Color")])
+    customColors <- setNames(pal_df$Color, pal_df$Conditions)
+
+    pal_for <- function(groups) {
+      used <- intersect(names(customColors), unique(as.character(groups)))
+      customColors[used]
+    }
+
+    # ── Pool label (first condition containing "pool") ──────────────────
+    v_cond <- as.character(SSF$Conditions)
+    pool_label <- {
+      u <- unique(v_cond[grepl("pool", tolower(v_cond))])
+      if (length(u)) u[1] else NA_character_
+    }
+
+    # ── Order by RunOrder ───────────────────────
+    valid_samples <- rownames(SSF)[order(SSF$RunOrder)]
+
+    # ── Merge Conditions + data (keeps rownames) ────────────────────────
+    Drift_data <- merge(SSF %>% dplyr::select(Conditions), data, by = 0, sort = FALSE)
+    colnames(Drift_data)[1] <- "File.Name"
+    rownames(Drift_data) <- Drift_data$File.Name
+
+    # Enforce acquisition order
+    Drift_data_ordered <- Drift_data[match(valid_samples, Drift_data$File.Name), , drop = FALSE]
+    Drift_data_ordered <- Drift_data_ordered[!is.na(rownames(Drift_data_ordered)), ]
+    Drift_data_ordered$File.Name <- NULL
+
+    # Ensure numeric intensities
+    Drift_data_ordered[, -1] <- sapply(Drift_data_ordered[, -1], as.numeric)
+
+    # ── Compute drift metrics (Median + TIC) ────────────────────────────
+    row_medians <- matrixStats::rowMedians(as.matrix(Drift_data_ordered[, -1]), na.rm = TRUE)
+    row_sums    <- rowSums(as.matrix(Drift_data_ordered[, -1]), na.rm = TRUE)
+
+    plotdata <- data.frame(
+      SampleMedian = row_medians,
+      TIC          = row_sums,
+      SampleGroup  = Drift_data_ordered$Conditions,
+      check.names  = FALSE
+    ) %>% tibble::rownames_to_column("RowNames")
+
+    plotdata$RowNames <- factor(plotdata$RowNames, levels = plotdata$RowNames)
+    plotdata$Order    <- seq_len(nrow(plotdata))
+
+    # filename prefix
+    prefix <- if (!is.null(add_to_name) && nzchar(add_to_name)) paste0(add_to_name, "__") else ""
+
+    # ── Plot helper ────────────────────────────
+    make_drift_plot <- function(df, yvar, ylab, title, filename) {
+
+      pal_use <- pal_for(df$SampleGroup)
+      df$SampleGroup <- factor(as.character(df$SampleGroup), levels = names(pal_use))
+
+      pool_df <- if (!is.na(pool_label)) {
+        df[as.character(df$SampleGroup) == pool_label, , drop = FALSE]
+      } else {
+        NULL
+      }
+
+      p <- ggplot(df, aes(x = RowNames, y = .data[[yvar]], fill = SampleGroup)) +
+        geom_col(position = "dodge") +
+        geom_smooth(
+          data = pool_df,
+          aes(x = Order, y = .data[[yvar]]),
+          method = "lm", se = FALSE,
+          color = "red", inherit.aes = FALSE
+        ) +
+        scale_fill_manual(values = pal_use, drop = FALSE) +
+        labs(title = title, x = "Samples by acquisition order", y = ylab) +
+        theme_minimal() +
+        theme(
+          axis.text.x = element_text(angle = 40, hjust = 1),
+          plot.title  = element_text(size = 22)
+        )
+
+      ggsave(
+        filename = file.path(SignalDrift_dir, paste0(prefix, filename)),
+        plot = p, width = 10, height = 8
+      )
+    }
+
+    # ── Core drift plots ────────────────────────
+    make_drift_plot(plotdata, "SampleMedian", "Sample median",
+                    "Signal drift: sample median", "SignalDrift_Median_SampleGroup.svg")
+    make_drift_plot(plotdata, "TIC", "Total ion count (TIC)",
+                    "Signal drift: TIC", "SignalDrift_TIC_SampleGroup.svg")
+
+    # Pool vs Sample (binary view)
+    plotdata_pool <- transform(
+      plotdata,
+      SampleGroup = if (!is.na(pool_label)) ifelse(SampleGroup == pool_label, pool_label, "Sample") else "Sample"
+    )
+
+    make_drift_plot(plotdata_pool, "SampleMedian", "Sample median",
+                    "Signal drift: median (pool highlighted)", "SignalDrift_Median_PoolSamples.svg")
+    make_drift_plot(plotdata_pool, "TIC", "Total ion count (TIC)",
+                    "Signal drift: TIC (pool highlighted)", "SignalDrift_TIC_PoolSamples.svg")
+
+    # ── Optional: Valine-d8 diagnostics ─────────
+    valine_idx  <- grep(valine_pattern, tolower(colnames(Drift_data_ordered)), ignore.case = TRUE)
+    valine_done <- FALSE
+
+    if (length(valine_idx) > 0) {
+
+      valine_col <- colnames(Drift_data_ordered)[valine_idx[1]]
+
+      plotdataIS <- data.frame(
+        ValineIS    = Drift_data_ordered[[valine_col]],
+        SampleGroup = Drift_data_ordered$Conditions,
+        RowNames    = rownames(Drift_data_ordered),
+        check.names = FALSE
+      )
+
+      plotdataIS$Index   <- seq_len(nrow(plotdataIS))
+      plotdataIS$RowNames <- factor(plotdataIS$RowNames,
+                                    levels = rownames(Drift_data_ordered), ordered = TRUE)
+
+      pal_use <- pal_for(plotdataIS$SampleGroup)
+
+      val_cv <- function(x) round(100 * sd(x, na.rm = TRUE) / mean(x, na.rm = TRUE), 2)
+      ValSampCV <- val_cv(plotdataIS$ValineIS)
+      ValPoolCV <- if (!is.na(pool_label)) val_cv(plotdataIS$ValineIS[plotdataIS$SampleGroup == pool_label]) else NA_real_
+
+      # Valine drift plot
+      p_val <- ggplot(plotdataIS, aes(x = RowNames, y = ValineIS, fill = SampleGroup)) +
+        geom_col(position = "dodge") +
+        geom_smooth(aes(x = Index, y = ValineIS),
+                    method = "lm", se = FALSE, color = "red", inherit.aes = FALSE) +
+        scale_y_continuous(limits = c(0, NA)) +
+        scale_fill_manual(values = pal_use, drop = FALSE) +
+        labs(
+          title    = paste0("Signal drift: ", valine_col, " (internal standard)"),
+          subtitle = paste("PoolCV =", ValPoolCV, "| SampleCV =", ValSampCV),
+          x = "Samples by acquisition order", y = "Peak area"
+        ) +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 40, hjust = 1),
+              plot.title  = element_text(size = 22))
+
+      ggsave(
+        filename = file.path(SignalDrift_dir, paste0(prefix, "SignalDrift_Valine-d8(IS).svg")),
+        plot = p_val, width = 12, height = 10
+      )
+
+      # Combine metrics for correlations
+      plotdata_combined <- merge(plotdata, plotdataIS %>% dplyr::select(-SampleGroup), by = "RowNames")
+
+      cor_TIC_valine    <- cor(plotdata_combined$TIC,          plotdata_combined$ValineIS, use = "complete.obs")
+      cor_median_valine <- cor(plotdata_combined$SampleMedian, plotdata_combined$ValineIS, use = "complete.obs")
+
+      # Optional: Extraction Buffer vs IS
+      eb_col <- grep("^Extraction\\s*Buffer$", names(SSF), ignore.case = TRUE, value = TRUE)
+
+      if (length(eb_col) == 1) {
+        plotdata_combined$ExtractionBuffer <- SSF[match(plotdata_combined$RowNames, rownames(SSF)), eb_col]
+        plotdata_combined$ExtractionBuffer <- as.numeric(plotdata_combined$ExtractionBuffer)
+        plotdata_combined$ExtractionBuffer[is.na(plotdata_combined$ExtractionBuffer)] <-
+          mean(plotdata_combined$ExtractionBuffer, na.rm = TRUE)
+
+        ok <- complete.cases(plotdata_combined$ExtractionBuffer, plotdata_combined$ValineIS)
+        cor_ExtrBuffer_valine <- if (sum(ok) >= 2) {
+          cor(plotdata_combined$ExtractionBuffer[ok], plotdata_combined$ValineIS[ok])
+        } else {
+          NA_real_
+        }
+      } else {
+        plotdata_combined$ExtractionBuffer <- NA_real_
+        cor_ExtrBuffer_valine <- NA_real_
+      }
+
+      # Scatter plots
+      p1 <- ggplot(plotdata_combined, aes(x = ValineIS, y = TIC, color = SampleGroup)) +
+        geom_point(size = 3) +
+        geom_smooth(method = "lm", se = FALSE, color = "black") +
+        scale_color_manual(values = pal_for(plotdata_combined$SampleGroup), drop = FALSE) +
+        labs(
+          title = paste("TIC vs", valine_col, "(r =", round(cor_TIC_valine, 3), ")"),
+          x = paste(valine_col, "(IS peak area)"), y = "TIC"
+        ) +
+        theme_minimal()
+
+      p2 <- ggplot(plotdata_combined, aes(x = ValineIS, y = SampleMedian, color = SampleGroup)) +
+        geom_point(size = 3) +
+        geom_smooth(method = "lm", se = FALSE, color = "black") +
+        scale_color_manual(values = pal_for(plotdata_combined$SampleGroup), drop = FALSE) +
+        labs(
+          title = paste("Median vs", valine_col, "(r =", round(cor_median_valine, 3), ")"),
+          x = paste(valine_col, "(IS peak area)"), y = "Sample median"
+        ) +
+        theme_minimal()
+
+      p3 <- ggplot(plotdata_combined, aes(x = ValineIS, y = ExtractionBuffer, color = SampleGroup)) +
+        geom_point(size = 3) +
+        geom_smooth(method = "lm", se = FALSE, color = "black") +
+        scale_color_manual(values = pal_for(plotdata_combined$SampleGroup), drop = FALSE) +
+        labs(
+          title = paste("Extraction buffer vs", valine_col, "(r =", round(cor_ExtrBuffer_valine, 3), ")"),
+          x = paste(valine_col, "(IS peak area)"), y = "Extraction buffer"
+        ) +
+        theme_minimal()
+
+      # Correlation heatmap (TIC / Median / IS)
+      cor_matrix <- plotdata_combined %>%
+        dplyr::select(TIC, SampleMedian, ValineIS) %>%
+        as.data.frame() %>%
+        stats::cor(use = "complete.obs")
+
+      cor_df <- reshape2::melt(cor_matrix)
+      colnames(cor_df) <- c("Var1", "Var2", "Correlation")
+
+      p4 <- ggplot(cor_df, aes(x = Var1, y = Var2, fill = Correlation)) +
+        geom_tile(color = "white") +
+        geom_text(aes(label = round(Correlation, 2)), color = "black", size = 5) +
+        scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1, 1)) +
+        theme_minimal() +
+        labs(title = "Correlation matrix") +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+      p_all <- (p1 | p2 | p3 | p4)
+
+      ggsave(
+        filename = file.path(SignalDrift_dir, paste0(prefix, "Correlation_TIC_Median_ValineIS.svg")),
+        plot = p_all, width = 24, height = 6
+      )
+
+      # Feature-wise correlations vs IS
+      valine_vector <- Drift_data_ordered[, valine_col]
+      valine_vector <- valine_vector[match(rownames(data), rownames(Drift_data_ordered))]
+
+      feature_cor <- sapply(data, function(v) cor(v, valine_vector, use = "complete.obs"))
+      feature_cor_df <- data.frame(
+        Feature = names(feature_cor),
+        CorrelationWithValineIS = feature_cor,
+        check.names = FALSE
+      ) %>% dplyr::arrange(CorrelationWithValineIS)
+
+      top_neg <- head(feature_cor_df[order(feature_cor_df$CorrelationWithValineIS), ], 20) %>%
+        dplyr::mutate(Feature = gsub("\\*", "", Feature))
+      top_pos <- tail(feature_cor_df[order(feature_cor_df$CorrelationWithValineIS), ], 20) %>%
+        dplyr::mutate(Feature = gsub("\\*", "", Feature))
+
+      # Optional: annotate with RT if TF list exists
+      if (exists("ProjectFolder")) {
+        rt_file <- file.path(ProjectFolder, "tsatsiki_v03_media/FINAL_TF_LIST.xlsx")
+        if (file.exists(rt_file) && requireNamespace("readxl", quietly = TRUE)) {
+          featRTs <- readxl::read_excel(rt_file)
+
+          top_neg <- dplyr::left_join(top_neg, featRTs %>% dplyr::select(`Standardized name`, RT),
+                                      by = c("Feature" = "Standardized name")) %>%
+            dplyr::mutate(Feature = paste0(Feature, " (RT=", round(RT, 2), ")"))
+
+          top_pos <- dplyr::left_join(top_pos, featRTs %>% dplyr::select(`Standardized name`, RT),
+                                      by = c("Feature" = "Standardized name")) %>%
+            dplyr::mutate(Feature = paste0(Feature, " (RT=", round(RT, 2), ")"))
+        }
+      }
+
+      p_hist <- ggplot(feature_cor_df, aes(x = CorrelationWithValineIS)) +
+        geom_histogram(bins = 50, fill = "steelblue", color = "white") +
+        labs(title = paste("Feature-wise correlation with", valine_col),
+             x = "Pearson correlation", y = "Number of features") +
+        theme_minimal()
+
+      p_neg <- ggplot(top_neg, aes(x = reorder(Feature, CorrelationWithValineIS), y = CorrelationWithValineIS)) +
+        geom_col(fill = "firebrick") +
+        coord_flip() +
+        labs(title = "Top 20 most negatively correlated features",
+             x = "Feature", y = "Correlation") +
+        theme_minimal()
+
+      p_pos <- ggplot(top_pos, aes(x = reorder(Feature, CorrelationWithValineIS), y = CorrelationWithValineIS)) +
+        geom_col(fill = "darkgreen") +
+        coord_flip() +
+        labs(title = "Top 20 most positively correlated features",
+             x = "Feature", y = "Correlation") +
+        theme_minimal()
+
+      combined_plot <- p_hist / (p_neg | p_pos)
+
+      ggsave(
+        filename = file.path(SignalDrift_dir, paste0(prefix, "Feature_wise_Valine-d8_Correlations.svg")),
+        plot = combined_plot, width = 18, height = 10
+      )
+
+      valine_done <- TRUE
+    }
+
+    invisible(list(
+      outdir        = SignalDrift_dir,
+      pool_label    = pool_label,
+      valine_found  = valine_done
+    ))
+  }))
+}
+
+
+# ──────────────────────────────────────────────
+# Output message
+message("#0.6. Load helper functions — completed successfully.")
+
+```
+
+### ---- 1. Data Cleaning ---- 
+# 1.0 Preparation.
+```{r}
+# Set sub folders
+Data_cleaning_dir <- file.path(output.dir, "1. Data Cleaning")
+if (!dir.exists(Data_cleaning_dir)) dir.create(Data_cleaning_dir, recursive = TRUE)
+
+Metabolite_Metadata <- data.frame(matrix(ncol = 0, nrow = length(colnames(data))))
+Metabolite_Metadata$Metabolite <- colnames(data)
+# Metabolite_Metadata$`SNratio<3` <- rownames(Metabolite_Metadata) %in% gsub("[^A-Za-z0-9 ]", "", names(blank_dominated_features[blank_dominated_features]))
+# Data_cleaning_dir
+# , ProjectCode,"_",Sys.Date(), 
+
+# Prepare datasets
+if(CoRe==T){
+  # Split the data into samples and Ctrl samples
+  # for fun check
+  PCA_SSF_samples <- SSF[media_sample_names,]
+  PCA_data_samples <- data[media_sample_names,]
+  
+  # for fun check
+  PCA_SSF_ctrl <- SSF[media_control_names,]
+  PCA_data_ctrl <- data[media_control_names,]
+  
+  PCA_SSF_list <- list(PCA_SSF_samples,PCA_SSF_ctrl)
+  PCA_data_list <- list(PCA_data_samples,PCA_data_ctrl)
+  
+
+}else{
+  PCA_SSF_list <- list(SSF)
+  PCA_data_list <- list(data)
+}
+
+res <- make_pca_grid(data, SSF, add_to_name = "1. Raw_Raw")
+make_signal_drift_reports(data, SSF, add_to_name = "1. Raw_Raw")
+
+if(CoRe==T){
+  # Split the data into samples and Ctrl samples
+  # for fun check
+  SSF_samples <- SSF[media_sample_names,]
+  data_samples <-  data[media_sample_names,]
+  
+  # for fun check
+  SSF_ctrl <- SSF[media_control_names,]
+  data_ctrl <- data[media_control_names,]
+  
+  SSF_list <- list(SSF_samples,SSF_ctrl)
+  data_list <- list(data_samples,data_ctrl)
+}else{
+  SSF_list <- list(SSF)
+  data_list <- list(data)
+}
+paste('### ---- 1. Data Cleaning - #1.0 Preparation Finished!')
+```
+
+#1.1. Incosistent Features for TF peak verification.
+```{r}
+# Start new col in metabolite metadata
+Metabolite_Metadata$Inconsistent_peaks <- FALSE
+
+# Loop over datasets
+for(i in 1:length(SSF_list)){ #i=1
+  
+  # Dataset selection
+  SSF = SSF_list[[i]]
+  data = data_list[[i]]
+  if(i==1){
+    outname<- "sample_"
+  }else{
+    outname<- "ctrl_"
+  }
+  
+  # Remove blanks from data
+  unconcistentTFpeak_data <- data[!rownames(data) %in% rownames(SSF)[tolower(SSF$Conditions) == blank_samp_id],]
+  unconcistentTFpeak_SSF <-  SSF[!rownames(SSF) %in% rownames(SSF)[tolower(SSF$Conditions) == blank_samp_id],]
+  # Find columns with zeros
+  cols_with_zeros <- colnames(unconcistentTFpeak_data)[colSums(unconcistentTFpeak_data == 0, na.rm = TRUE) > 0]
+  
+  # Get columns with at least one zero and subset the data
+  unconcistentTFpeak_data_with_zeros <- unconcistentTFpeak_data[, cols_with_zeros]
+  
+  # Initialize result list
+  result <- list()
+  all_values_mixgroups <- vector()
+  
+  # Loop over metabolites with at least one zero
+  for (col in colnames(unconcistentTFpeak_data_with_zeros)) {    # col = colnames(unconcistentTFpeak_data_with_zeros)[1]
+    metabolite_values <- unconcistentTFpeak_data_with_zeros[[col]]
+    groups <- unconcistentTFpeak_SSF$Conditions
+    unique_groups <- unique(groups)
+    group_results <- setNames(rep(FALSE, length(unique_groups)), unique_groups)
+    
+    for (grp in unique_groups) {   # grp = unique_groups[2]
+      group_values <- metabolite_values[groups == grp]
+      has_zero <- any(group_values == 0, na.rm = TRUE)
+      has_value <- any(group_values != 0, na.rm = TRUE)
+      group_results[grp] <- has_zero & has_value
+      if (has_zero & has_value) {
+        all_values_mixgroups <- c(all_values_mixgroups, group_values)
+      }
+    }
+    result[[col]] <- group_results
+  }
+  
+  # Build result table
+  result_df <- do.call(rbind, result)
+  result_df_filtered <- result_df[apply(result_df, 1, any), ]  # Keep features with at least one TRUE
+  result_df_filtered <- as.data.frame(t(result_df_filtered))
+  result_df_filtered <- rownames_to_column(result_df_filtered, "SampleGroup")
+  
+  # Get corresponding values
+  result_df_filtered_values <- unconcistentTFpeak_data[, colnames(unconcistentTFpeak_data) %in% colnames(result_df_filtered)]
+  result_df_filtered_values <- rownames_to_column(result_df_filtered_values, "SampleGroup")
+  result_df_filtered_values$Sample <- result_df_filtered_values$SampleGroup
+  result_df_filtered_values$SampleGroup <- unconcistentTFpeak_SSF[result_df_filtered_values$SampleGroup, "Conditions"]
+  result_df_filtered_values <- result_df_filtered_values %>% relocate(Sample, .before = everything())
+  
+  # add cross to the names in the original data, Example: add † to each column name
+  Incosistent_metab_names <- colnames(data)[colnames(data) %in% colnames(result_df_filtered)]
+  colnames(data_raw)[gsub("\u2020", "",colnames(data_raw)) %in% colnames(result_df_filtered)] <- paste0(Incosistent_metab_names, "\u2020")  
+  # "\u2020" = †
+  
+  # Excel export
+  wb <- createWorkbook()
+  
+  # Sheet 1: Boolean matrix
+  addWorksheet(wb, "boolean")
+  writeData(wb, "boolean", result_df_filtered)
+  conditionalFormatting(wb, "boolean",
+                        cols = 2:ncol(result_df_filtered),
+                        rows = 2:(nrow(result_df_filtered) + 1),
+                        type = "contains",
+                        rule = "TRUE",
+                        style = createStyle(bgFill = "#FFC7CE")
+  )
+  
+  # Sheet 2: Raw intensity values
+  addWorksheet(wb, "values")
+  writeData(wb, "values", result_df_filtered_values)
+  
+  # Style for highlighting
+  redStyle <- createStyle(fgFill = "#FFC7CE", fontColour = "#9C0006")
+  
+  # Highlight cells where inconsistency was detected
+  for (r in 1:nrow(result_df_filtered)) {
+    sample_group <- result_df_filtered[r, "SampleGroup"]
+    for (c in colnames(result_df_filtered)[-1]) {
+      if (isTRUE(result_df_filtered[r, c])) {
+        matching_rows <- which(result_df_filtered_values$SampleGroup == sample_group)
+        matching_col <- which(colnames(result_df_filtered_values) == c)
+        for (row in matching_rows) {
+          addStyle(wb, "values", style = redStyle, rows = row + 1, cols = matching_col, stack = TRUE)
+        }
+      }
+    }
+  }
+  
+  # Save the Excel file
+  saveWorkbook(wb, file = file.path(Data_cleaning_dir, paste0("Incosistent_Features_for_TF_peak_verification_",outname ,ProjectCode,"_",Sys.Date(), ".xlsx")), overwrite = TRUE)
+  
+  
+  
+  
+  ### ----- Make data values distribution plots with highlighted the values of Inconsistent peaks. ---- ###
+  
+  # Flatten the data into one long vector
+  all_values <- as.vector(as.matrix(unconcistentTFpeak_data))
+  
+  # Create a dataframe marking whether each value is in your vector
+  plot_df <- data.frame(
+    Value = all_values,
+    Highlight = ifelse(all_values %in% all_values_mixgroups, "Highlighted", "Background"))
+  
+  # Plot with x-axis limited from 0 to 100,000
+  mixedGroupDist <- ggplot(plot_df, aes(x = Value, fill = Highlight)) +
+    geom_histogram(bins = 300000, alpha = 0.7, position = "identity") +
+    scale_fill_manual(values = c("Background" = "grey70", "Highlighted" = "red")) +
+    coord_cartesian(xlim = c(0, 20000000)) +
+    labs(title = "Distribution of All Values with Highlighted values of Incosistent Features",
+         x = "Value",
+         y = "Count") +
+    theme_minimal()
+  
+  # Save plot
+  ggsave(filename = file.path(Data_cleaning_dir, paste0("zeroMixedGroups_Distribution_",outname , ProjectCode,"_",Sys.Date(), ".svg")), 
+         plot = mixedGroupDist, width = 14, height = 8)
+  
+  # Update Metabolite metadata
+  Metabolite_Metadata$Inconsistent_peaks <-  Metabolite_Metadata$Inconsistent_peaks |Metabolite_Metadata$Metabolite %in% Incosistent_metab_names
+  
+  write.xlsx(Metabolite_Metadata, file.path(Data_cleaning_dir,"Metabolite_Metadata.xlsx"), colNames = TRUE)
+}
+paste0("#1.1. Incosistent Features for TF peak verification Finished!")
+```
+
+#1.2. Remove metabolites in blanks.
+```{r}
+Metabolite_Metadata$`SNratio<3`  <- FALSE
+for(i in 1:length(SSF_list)){ #i=1
+  
+  SSF = SSF_list[[i]]
+  data = data_list[[i]]
+  PCA_SSF = PCA_SSF_list[[i]]
+  PCA_data = PCA_data_list[[i]]
+  if(i==1){
+    outname<- "sample_"
+  }else{
+    outname<- "ctrl_"
+  }
+  
+  # Split data into blanks and real samples
+  blank_rows <- rownames(SSF)[grep("Blank", SSF$Conditions)]
+  sample_rows <- rownames(SSF)[!rownames(SSF) %in% blank_rows]
+  
+  # Subset data
+  data_blanks <- data[blank_rows, , drop = FALSE]
+  data_samples <- data[sample_rows, , drop = FALSE]
+  
+  # Calculate feature means across blanks and samples
+  blank_means <- colMeans(data_blanks, na.rm = TRUE)
+  blank_means[is.na(blank_means)] <- 0
+  
+  sample_means <- colMeans(data_samples, na.rm = TRUE)
+  sample_means[is.na(sample_means)] <- 0
+  
+  # Set Signal to Noise ratio threshold (e.g., sample mean must be >3x blank mean)
+  SignaltoNoiseRatio_threshold <- SignaltoNoiseRatio_threshold
+  keep_features <- sample_means > (SignaltoNoiseRatio_threshold * blank_means)
+  
+  # Keep only features passing the filter
+  filtered_data <- data_samples[, keep_features, drop = FALSE]
+  
+  # For features not passing the filter, set their values in samples to zero
+  blank_dominated_features <- !keep_features
+  blank_dominated_data <- data[, blank_dominated_features, drop = FALSE]
+  
+  # Make barplot of Blank dominated metabolites and save it for visual inspection.
+  blank_drift <- list()
+  for (metab in colnames(blank_dominated_data)) {   # metab = colnames(data)[1]
+    # Merge metabolite values with metadata
+    plotdata <- merge(blank_dominated_data %>% select(all_of(metab)), SSF, by = 0)
+    
+    # Ensure RunOrder is numeric and sort
+    plotdata <- plotdata[order(plotdata$RunOrder), ]
+    
+    # Make Row.names a factor ordered by RunOrder
+    plotdata$Row.names <- factor(plotdata$Row.names, levels = plotdata$Row.names)
+    
+    # Plot with Colors column used for custom colors but Conditions for legend
+    p <- ggplot(plotdata, aes(x = Row.names, y = .data[[metab]], fill = Conditions)) +
+      geom_col(position = "dodge") +
+      scale_fill_manual(values = setNames(plotdata$Color, plotdata$Conditions)) + # map colors
+      labs(title = paste(metab),
+           x = "Samples (Run Order)", y = "Intensity") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 6),  # rotate x labels
+            plot.title = element_text(size = 14))
+    
+    # Store plot
+    blank_drift[[metab]] <- p
+  }
+  
+  # Save blank Bar-plots
+  BlankPlotsloc <- file.path(Data_cleaning_dir,paste0("BlankBarPlots_" ,outname , ProjectCode,"_",Sys.Date(), ".pdf"))
+  pdf(BlankPlotsloc, width = 8, height = 8) # Adjust width and height as needed
+  
+  # Iterate over the list of plots and print each one
+  for (plot in blank_drift) {
+    print(plot)
+  }
+  
+  # Close the PDF device
+  dev.off()
+  
+  # # remove
+  # data <- filtered_data
+  # SSF <- SSF[rownames(SSF) %in% rownames(data),]
+  
+  # Update metabolite metadata
+  Metabolite_Metadata$`SNratio<3` <-  Metabolite_Metadata$`SNratio<3` |Metabolite_Metadata$Metabolite %in% gsub("\u2020", "", names(blank_dominated_features[blank_dominated_features]))
+  
+  write.xlsx(Metabolite_Metadata, file.path(Data_cleaning_dir,"Metabolite_Metadata.xlsx"), colNames = TRUE)
+  
+  # Remove blanks
+  
+  SSF <- SSF[-grep(blank_samp_id , rownames(SSF)),]
+  data <- data[-grep(blank_samp_id , rownames(data)),]  
+  # Remove blanks from data
+  SSF_list[[i]] <- SSF
+  data_list[[i]] <- data
+  
+  
+  # PCA
+  # # remove
+  PCA_data <- filtered_data
+  PCA_SSF <- SSF[rownames(SSF) %in% rownames(PCA_data),]
+  make_pca_grid(PCA_data, PCA_SSF, add_to_name = paste0("2. ",outname,"Raw_Blank_removed"))
+  make_signal_drift_reports(PCA_data, PCA_SSF, add_to_name =  paste0("2. ",outname,"Raw_Blank_removed"))
+  PCA_SSF_list[[i]] <- PCA_SSF
+  PCA_data_list[[i]] <- PCA_data
+}
+paste0("#1.2. Remove metabolites in blanks Finished!")
+```
+
+
+#1.3. Feature filtering for missing values in samples and pools. 80% modified rule.
+```{r}
+#Here we use the 80% modified rule so we allow for ~20% missing values. We look at the smallest sample group. Fοr the pools we do the same but we always have to have at least 4 Pool samples.
+
+Metabolite_Metadata$FeatureFiltering  <- FALSE
+for(i in 1:length(SSF_list)){ #i=1
+  
+  SSF = SSF_list[[i]]
+  data = data_list[[i]]
+  PCA_SSF = PCA_SSF_list[[i]]
+  PCA_data = PCA_data_list[[i]]
+  if(i==1){
+    outname<- "sample_"
+  }else{
+    outname<- "ctrl_"
+  }
+  
+  # remake the zeros into NAs 
+  data[data==0] <- NA
+  # Parameters
+  Feature_Filt_Value <- Feature_Filt_Value # Set sample filtering value
+  Feature_Filt_Value_Pools <- Feature_Filt_Value_Pools # Set pool filtering value \
+  # If we have 5 samples/pools, we allow 1 0/NA in 5 which means 75 not 80
+  # If we have 4 samples/pools, we allow 1 0/NA in 4 which means 75 not 80
+  
+  # Get features to filter for each group
+  filter_results <- list()
+  
+  ## Here I am excluding pool ###
+  for (group in setdiff(unique(SSF$Conditions), c("Blank")) ) { # group = setdiff(unique(SSF$Conditions), "Blank")[1]
+    
+    threshold <- if (isTRUE(group == SSF$Conditions[grep("pool", tolower(SSF$Conditions))[1]]))
+  Feature_Filt_Value_Pools else Feature_Filt_Value
+    
+    # Subset data and conditions
+    idx <- which(SSF$Conditions == group)
+    sub_data <- data[idx, , drop = FALSE]
+    sub_conditions <- SSF$Conditions[idx]
+    
+    # Skip if no data
+    if (length(idx) == 0 || length(unique(sub_conditions)) < 1) {
+      filter_results[[group]] <- character(0)
+      next
+    }
+    
+    # Split by condition
+    split_data <- split(sub_data, sub_conditions)
+    #split_data <- split(data, SSF$Conditions)
+    
+    feature_missing <- c() 
+    
+    
+    for (df in split_data) { # df = split_data[1]
+      df <- as.data.frame(df)
+      for (col in seq_len(ncol(df))) {    #   col=18
+        if (sum(is.na(df[, col])) > round((1 - threshold) * nrow(df)) ) { # 0.8 means, we allow up but NOT equal to 20 NA vales.
+          # We Use greater than the threshold. So, 1 NA in 5 non NA is allowed.
+          feature_missing <- c(feature_missing, col)
+        }
+      }
+    }
+    filter_results[[group]] <-  colnames(data)[unique(feature_missing)]
+  }
+  
+  # Remove a feature if it is not found in the pools
+  to_filter <- c()
+  to_filter <- filter_results[[ as.character(SSF$Conditions[ grep("pool", tolower(SSF$Conditions))[1] ]) ]]
+  
+  # Keep only features missing in *all* conditions ignoring pools
+  feature_missing <- unlist(filter_results)
+  if (length(feature_missing) > 0) {
+    count <- table(feature_missing)
+    for (c in names(count)) { 
+      if (count[[c]] == length(unique(SSF$Conditions[-grep("pool", tolower(SSF$Conditions))])) ) {
+        to_filter <- c(to_filter, c)
+      }
+    }
+  }
+  
+  # Combine
+  filtered_features <- unique(to_filter)
+  
+  # Filter data now. Otherwise they are removed when its time for them to be removed. 
+  #data <- data[, !colnames(data) %in% filtered_features, drop = FALSE]
+  
+  features_filtered_data <- data[,filtered_features]
+  features_filtered_data <- rownames_to_column(features_filtered_data, "Samples")
+  
+  # Save values for visual inspection
+  write.xlsx(features_filtered_data, file.path(Data_cleaning_dir,"Features_FIltered_data.csv"), colNames = TRUE)
+  
+  # Update metabolite metadata
+  Metabolite_Metadata$FeatureFiltering <-  Metabolite_Metadata$FeatureFiltering |Metabolite_Metadata$Metabolite %in% gsub("\u2020", "",filtered_features)
+  
+  write.xlsx(Metabolite_Metadata, file.path(Data_cleaning_dir,"Metabolite_Metadata.xlsx"), colNames = TRUE)
+  
+  # PCA
+  # # remove
+  PCA_data <- PCA_data <- PCA_data[, !colnames(PCA_data) %in% filtered_features, drop = FALSE]
+  PCA_SSF <- SSF[rownames(SSF) %in% rownames(PCA_data),]
+  make_pca_grid(PCA_data, PCA_SSF, add_to_name =  paste0("3. ",outname,"NA_filtered"))
+  make_signal_drift_reports(PCA_data, PCA_SSF, add_to_name = paste0("3. ",outname,"NA_filtered"))
+  PCA_SSF_list[[i]] <- PCA_SSF
+  PCA_data_list[[i]] <- PCA_data
+}
+paste0("#1.3. Feature filtering for missing values in samples and pools. 80% modified rule Finished!")
+```
+
+#1.4. CV filtering. 30% filtering.
+```{r}
+Threshold_cv = Threshold_cv
+
+for(i in 1:length(SSF_list)){ # i=1
+  
+  SSF = SSF_list[[i]]
+  data = data_list[[i]]
+  PCA_SSF = PCA_SSF_list[[i]]
+  PCA_data = PCA_data_list[[i]]
+  if(i==1){
+    outname<- "sample_"
+  }else{
+    outname<- "ctrl_"
+  }
+  
+   if(CoRe == T & i==1 ){
+   ## -------- Pool Coefficient of variation Estimation ------ ##
+  #A. Pool
+  pool_data <- data[rownames(SSF)[SSF$Conditions == SSF$Conditions[grep("pool", tolower(SSF$Conditions))[1]]], ]
+  # Calculate the Coefficient of Variation
+  result_df <- apply(pool_data, 2,  function(x) { (sd(x, na.rm =T)/  mean(x, na.rm =T))*100 }  ) %>% t()%>% as.data.frame()
+  rownames(result_df)[1] <- "Pool_CV"
+  # reorder 
+  result_df <- result_df[, names(pool_data)]
+  # calculate the percentage of  NAs
+  NAvector <- apply(pool_data, 2,  function(x) { (sum(is.na(x))/length(x))*100 }  )#%>% t()%>% as.data.frame()
+  # Make the final dataframe
+  result_df_final <- result_df %>% t() %>% as.data.frame()%>% mutate(HighCV = Pool_CV > Threshold_cv)# %>% as.data.frame()
+  result_df_final$Pool_MissingValuePercentage <- NAvector
+  rownames(result_df_final)<- colnames(pool_data)
+  
+  #b. Sample
+  sample_data <- data[rownames(SSF)[SSF$Conditions != SSF$Conditions[grep("pool", tolower(SSF$Conditions))[1]]], ]
+  # Calculate the Coefficient of Variation
+  result_df <- apply(sample_data, 2,  function(x) { (sd(x, na.rm =T)/  mean(x, na.rm =T))*100 }  ) %>% t()%>% as.data.frame()
+  rownames(result_df)[1] <- "Sample_CV"
+  # reorder 
+  result_df <- result_df[, names(sample_data)]
+  # calculate the percentage of  NAs
+  NAvector <- apply(sample_data, 2,  function(x) { (sum(is.na(x))/length(x))*100 }  )#%>% t()%>% as.data.frame()
+  # Make the final dataframe
+  result_df_final <- merge(result_df_final, result_df %>% t() %>% as.data.frame(), by=0)
+  colnames(result_df_final)[1] <- "Metabolite" 
+  result_df_final <- result_df_final[match(colnames(data), result_df_final$Metabolite), ]
+  
+  #### -------------------------- CV histogram --------------------- ####
+  # Reshape to long format
+  long_df <- result_df_final %>%
+    select(Metabolite, Pool_CV, Sample_CV) %>%
+    pivot_longer(cols = c(Pool_CV, Sample_CV), names_to = "Type", values_to = "CV") %>%
+    mutate(Type = ifelse(Type == "Pool_CV", "Pool", "Sample"))
+  
+  # Create plot with stronger color distinction
+  HistCVcombined <- ggplot(long_df, aes(x = CV, fill = Type, color = Type)) +
+    geom_density(alpha = 0.3, size = 1.0) +
+    geom_vline(aes(xintercept = Threshold_cv), color = "black", linetype = "dashed", size = 1) +
+    labs(title = "Coefficient of Variation for Pool and Sample",
+         x = "Coefficient of Variation (CV%)",
+         y = "Density",
+         caption = paste0(nrow(result_df_final), " total features")) +
+    scale_fill_manual(values = c("Pool" = "red", "Sample" = "blue")) +
+    scale_color_manual(values = c("Pool" = "red", "Sample" = "blue")) +
+    theme_classic()
+  
+  # Add Valine-d8 (IS) line if present
+  if (length(grep(valine_pattern_id, tolower(result_df_final$Metabolite))) > 0) {
+    val_cv_pool <- result_df_final$Pool_CV[grep(valine_pattern_id, tolower(result_df_final$Metabolite))]
+    val_cv_samp <- result_df_final$Sample_CV[grep(valine_pattern_id, tolower(result_df_final$Metabolite))]
+    
+    HistCVcombined <- HistCVcombined +
+      geom_vline(xintercept = val_cv_pool, color = "red", linetype = "dashed", size = 1) +
+      geom_vline(xintercept = val_cv_samp, color = "blue", linetype = "dashed", size = 1) +
+      scale_x_continuous(breaks = c(30, 50, 100, val_cv_pool),
+                         labels = c("30", "50", "100", "Valine-d8 (IS)"))
+  }
+  
+  # Save
+  ggsave(filename = file.path(Data_cleaning_dir,paste0(outname ,"CV_Histogram.svg")), 
+         plot = HistCVcombined, width = 12, height = 6)
+  
+  message("n of metabolites removed because of RSD > " ,Threshold_cv, "% : " , sum(result_df_final$HighCV==T, na.rm = T))
+  
+  # Remove high cv features
+  # sample_data_high_cv_feats <- colnames(data)[result_df_final$HighCV==T]
+  # data <- data[,!colnames(data) %in% sample_data_high_cv_feats]
+  
+  # Save resulting table
+  result_df_final$Metabolite <- gsub("\u2020", "",result_df_final$Metabolite)
+  
+  colnames(result_df_final)[colnames(result_df_final) %in% c("HighCV", "Pool_CV", "Pool_MissingValuePercentage", "Sample_CV")] <- 
+    paste0(outname, c("HighCV", "Pool_CV","Pool_MissingValuePercentage" ,"Sample_CV"))
+  
+  Metabolite_Metadata <- merge(Metabolite_Metadata, result_df_final, "Metabolite")
+  write.xlsx(Metabolite_Metadata, file.path(Data_cleaning_dir,"Metabolite_Metadata.xlsx"), colNames = TRUE)
+   }
+  
+     if(CoRe == T & i==2 ){
+       Metabolite_Metadata <- read.xlsx( file.path(Data_cleaning_dir, "Metabolite_Metadata.xlsx"))
+     }
+ 
+  
+  # PCA
+  # # remove
+  sample_data_high_cv_feats <- colnames(data)[Metabolite_Metadata$sample_Pool_CV ==T]
+  PCA_data <- PCA_data[,!colnames(PCA_data) %in% sample_data_high_cv_feats]
+  PCA_SSF <- SSF[rownames(SSF) %in% rownames(PCA_data),]
+  make_pca_grid(PCA_data, PCA_SSF, add_to_name = paste0("4. ",outname,"CV_filtered"))
+  make_signal_drift_reports(PCA_data, PCA_SSF, add_to_name =  paste0("4. ",outname,"CV_filtered"))
+  PCA_SSF_list[[i]] <- PCA_SSF
+  PCA_data_list[[i]] <- PCA_data
+}
+
+paste0("#1.4. CV filtering. 30% filtering Finished!")
+```
+
+#1.5. Single Outlier Values filtering. Skip generally
+```{r eval = FALSE}
+data$SampleID <- rownames(data)
+SSF$SampleID <- rownames(SSF)
+
+long_data <- data %>%
+  pivot_longer(-SampleID, names_to = "Metabolite", values_to = "Value") %>%
+  left_join(SSF[, c("SampleID", "Conditions")], by = "SampleID")
+
+# Log data to make them ~ normally distributed
+#long_data$Value <- log2(long_data$Value)
+# Placeholder to collect outliers
+outlier_results <- list()
+
+for(selected_metabolite in  unique(long_data$Metabolite)){ # selected_metabolite = unique(long_data$Metabolite)[1]
+  if (selected_metabolite == "Valine-d8") next
+  # Filter for that metabolite
+  metab_data <- long_data %>% filter(Metabolite == selected_metabolite)
+  
+  # Loop over conditions
+  for (cond in unique(metab_data$Conditions)) { # cond = unique(metab_data$Conditions)[1]
+    group_data <- metab_data %>% filter(Conditions == cond)
+    
+    if(sum(!is.na(group_data$Value))>1){
+      for (i in seq_len(nrow(group_data))) {  #   i =  seq_len(nrow(group_data))[1]
+        test_val <- group_data$Value[i]
+        test_sample <- group_data$SampleID[i]
+        
+        # Leave-one-out: remove current value
+        rest <- group_data$Value[-i]
+        
+        if(length(rest[!is.na(rest)])>1){
+          m <- mean(rest, na.rm = TRUE)
+          s <- sd(rest, na.rm = TRUE)
+          
+          lower <- m - 4 * s
+          upper <- m + 4 * s
+          
+          if (!is.na(test_val) && (test_val < lower || test_val > upper)) {
+            outlier_results[[length(outlier_results) + 1]] <- data.frame(
+              SampleID = test_sample,
+              Condition = cond,
+              Value = test_val,
+              Mean_rest = m,
+              SD_rest = s,
+              Metabolite = selected_metabolite
+            )
+          }  
+        }
+      }
+    }
+  }
+}
+
+# Combine and print
+if (length(outlier_results) > 0) {
+  # Make outliers values into a df
+  outlier_results <- outlier_results[!sapply(outlier_results, is.null)]
+  # Combine all into a single data.frame
+  outlier_df <- do.call(rbind, outlier_results)
+  # View result
+  head(outlier_df)
+  
+  message(nrow(outlier_df)  ," Outlier values found.\n")
+} else {
+  cat("No outliers found.\n")
+}
+
+#remove the sample IDs
+data$SampleID <- NULL
+SSF$SampleID <- NULL
+
+# remove features  skip
+
+# # Loop through each outlier and set it to NA
+# for (i in seq_len(nrow(outlier_df))) {  # i =seq_len(nrow(outlier_df))[1]
+#   samp <- outlier_df$SampleID[i]
+#   feat <- outlier_df$Metabolite[i]
+#   data[samp, feat] <- NA
+# }
+
+# DO NOT remove single outler. Its not working properly yet. is gives hints but dont remove
+# # measure cv. if its high then 
+# x <- group_data$Value
+# med <- median(x)
+# mad_val <- mad(x)  # default is scaled for normal distribution
+# 
+# # Robust Z-scores
+# robust_z <- (x - med) / mad_val
+# which(abs(robust_z) > 2.5)
+# if its found agaib then remove? or do something about
+paste0("#1.5. Single Outlier Values filtering!")
+```
+
+Filter features
+
+Here I am filtering only with Feature filtering. In standard pipeline we filter with the filtered column.
+```{r}
+# Ensure metabolite order from data colnames
+met_order <-    gsub("\u2020", "", colnames(data_raw))
+
+# reorder metadata to match that order
+Metabolite_Metadata <- Metabolite_Metadata[match(met_order, Metabolite_Metadata$Metabolite), ]
+
+# Metabolite_Metadata <- Metabolite_Metadata %>%
+#   mutate(Filtered = if_any(
+#     everything(),  # check all other columns
+#     ~ .x == TRUE))
+
+Metabolite_Metadata <- Metabolite_Metadata %>%
+  mutate(Filtered = if_any(-Inconsistent_peaks, ~ .x == TRUE))
+
+write.xlsx(Metabolite_Metadata, file.path(Data_cleaning_dir,"Metabolite_Metadata.xlsx"), colNames = TRUE)
+
+# filter
+metabs_to_remvove <- Metabolite_Metadata %>% filter(Filtered) %>% pull(Metabolite)
+
+## Here we use the data_raw but the background subtracted data data_raw
+data <- data_raw[, !gsub("†", "", colnames(data_raw)) %in% metabs_to_remvove, drop = FALSE]
+
+# Remove blanks
+blank_samples <- rownames(SSF_raw)[tolower(SSF_raw$Conditions) == "blank"]
+
+data <- data[!rownames(data) %in% blank_samples, ]
+SSF <- SSF_raw[!rownames(SSF_raw) %in% blank_samples, ]
+
+paste0("### ---- 1. Data Cleaning ---- Finished!")
+```
+
+
+
+### ----- 2. Data Normalisation -----
+#2.0 Preparation
+```{r}
+# Set sub folders
+Data_normalisation_dir <- file.path(output.dir, "2. Data Normalisation")
+if (!dir.exists(Data_normalisation_dir)) dir.create(Data_normalisation_dir, recursive = TRUE)
+
+# Metabolite_Metadata$`SNratio<3` <- rownames(Metabolite_Metadata) %in% gsub("[^A-Za-z0-9 ]", "", names(blank_dominated_features[blank_dominated_features]))
+# Data_cleaning_dir
+# , ProjectCode,"_",Sys.Date(), 
+  
+if(CoRe==T){
+  # Split the data into samples and Ctrl samples
+  # for fun check
+  SSF_samples <- SSF[media_sample_names[!grepl(blank_samp_id, media_sample_names)],]
+  data_samples <- data[media_sample_names[!grepl(blank_samp_id, media_sample_names)],]
+  
+  # for fun check
+  SSF_ctrl <- SSF[media_control_names[!grepl(blank_samp_id, media_control_names)],]
+  data_ctrl <- data[media_control_names[!grepl(blank_samp_id, media_control_names)],]
+  
+  SSF_list <- list(SSF_samples,SSF_ctrl)
+  data_list <- list(data_samples,data_ctrl)
+}else{
+  SSF_list <- list(SSF)
+  data_list <- list(data)
+}
+paste0("#2.0 Preparation Finished!")
+```
+
+#2.1. IS normalisation valine-d8
+
+# Check if TIC is required or VAlineIS normalisation
+```{r}
+for(i in 1:length(SSF_list)){ # i=1
+  
+  SSF = SSF_list[[i]]
+  data = data_list[[i]]
+  PCA_SSF = PCA_SSF_list[[i]]
+  PCA_data = PCA_data_list[[i]]
+  if(i==1){
+    outname<- "sample_"
+  }else{
+    outname<- "ctrl_"
+  }
+  
+  ### ### Check TIC -----------------
+  SSF$TIC <- rowSums(data[rownames(SSF), , drop = FALSE], na.rm = TRUE)
+  
+  # 2) make a discrete key (because your function uses scale_color_manual)
+  SSF$TIC_key <- factor(rank(-SSF$TIC, ties.method = "first"))  # 1 = highest TIC
+  
+  # 3) map TIC rank to a gradient (high=red, low=blue)
+  tic_pal <- colorRampPalette(c("red","blue"))(nrow(SSF))
+  SSF$TIC_hex <- tic_pal[as.integer(SSF$TIC_key)]
+  
+  # 4) feed your function: set Color to hex, color_col to TIC_key
+  SSF$colorsave <- SSF$Color
+  SSF$Color <- SSF$TIC_hex
+  
+  make_pca_grid(data, SSF,
+                add_to_name = paste0("5.0 " ,outname, "TIC_gradient_CHECK"),
+                color_col   = "TIC_key")
+  
+  # Fix SSF
+  SSF$Color <- SSF$colorsave
+  SSF$TIC_hex <- NULL
+  SSF$TIC_key <- NULL
+  SSF$colorsave <- NULL
+  SSF$TIC <- NULL
+  
+  ### ### Check Valine -----------
+  # 1) Valine intensity per sample
+  SSF$VAL <- data[rownames(SSF), "valine-d8"]
+  
+  # 2) rank (highest = 1)
+  SSF$VAL_key <- factor(rank(-SSF$VAL, ties.method = "first"))
+  
+  # 3) gradient (high=red, low=blue)
+  val_pal <- colorRampPalette(c("red","blue"))(nrow(SSF))
+  SSF$VAL_hex <- val_pal[as.integer(SSF$VAL_key)]
+  
+  # 4) feed PCA function
+  SSF$colorsave <- SSF$Color
+  SSF$Color <- SSF$VAL_hex
+  
+  make_pca_grid(data, SSF,
+                add_to_name = paste0("5.1 " ,outname, "Valine_gradient_CHECK"),
+                color_col   = "VAL_key")
+  
+  # restore SSF
+  SSF$Color <- SSF$colorsave
+  SSF$VAL_hex <- NULL
+  SSF$VAL_key <- NULL
+  SSF$colorsave <- NULL
+  SSF$VAL <- NULL
+}
+```
+
+# TIC normalisation
+```{r }
+# shoud you norlaise with tic? CHEKC IF YOU SEE THE PATTERN IN PCA
+
+for(i in 1:length(SSF_list)){ # i=1
+  
+  SSF = SSF_list[[i]]
+  data = data_list[[i]]
+  PCA_SSF = PCA_SSF_list[[i]]
+  PCA_data = PCA_data_list[[i]]
+  if(i==1){
+    outname<- "sample_"
+  }else{
+    outname<- "ctrl_"
+  }
+  
+  tic <- rowSums(data_list[[i]], na.rm = TRUE)
+  tic_ref <- median(tic, na.rm = TRUE)
+  
+  data_tic <- sweep(data_list[[i]], 1, tic, "/") * tic_ref
+  
+  SSF <- SSF_list[[i]]
+  # PCA
+  make_pca_grid(data_tic, SSF, add_to_name = paste0("5.5 " ,outname, "TIC_normalised"))
+  make_signal_drift_reports(data_tic, SSF, add_to_name = paste0("5.5 " ,outname , "TIC_normalised"))
+  
+  make_pca_grid(data_tic, SSF, add_to_name = paste0("5.5 TIC_normalised_Big"), fig_size_cm = c(120, 80))
+  
+  data_list[[i]] <-data_tic 
+}
+paste0("#2.1 TIC normalisation Finished!")
+```
+
+
+#2.2. Signal Drift normalisation using LoessQC
+
+```{r}
+library(qcrlscR)
+
+suppressPackageStartupMessages({
+  library(qcrlscR)
+  library(dplyr)
+  library(tibble)
+  library(ggplot2)
+  library(gridExtra)
+  library(openxlsx)
+})
+
+# ---------- INPUT ----------
+data <- data_list[[1]]
+SSF <- SSF_list[[1]]
+
+# ---------- ORDER BY RUN ORDER ----------
+ord <- order(SSF$RunOrder)
+data_o <- data[ord, , drop = FALSE]
+SSF_o  <- SSF[ord, , drop = FALSE]
+
+all_samples <- rownames(SSF_o)
+feat_names  <- colnames(data_o)
+
+# QC/sample factor for qcrlscR
+cls_qc <- ifelse(SSF_o$Conditions == "Pool", "qc", "sample")
+cls_qc <- factor(cls_qc, levels = c("qc", "sample"))
+cls_bl <- factor(rep(1, nrow(SSF_o)))  # single batch
+
+# colors (expects SSF has: Conditions + Color)
+pal_map <- unique(SSF_o[, c("Conditions", "Color")])
+customColors <- setNames(pal_map$Color, pal_map$Conditions)
+
+# QC samples (Pools)
+qc_samples <- rownames(SSF_o)[tolower(SSF_o$Conditions) == "pool" | grepl("pool", tolower(SSF_o$Conditions))]
+samp_ids   <- setdiff(all_samples, qc_samples)
+qc_idx     <- which(all_samples %in% qc_samples)
+
+# group labels (within-group CV) only for NON-QC samples
+group_labels <- SSF_o$Conditions
+names(group_labels) <- rownames(SSF_o)
+group_labels_samp <- droplevels(factor(group_labels[samp_ids]))
+
+# ---------- SAFE HELPERS ----------
+cv_safe <- function(x) {
+  x <- as.numeric(x)
+  x <- x[is.finite(x)]
+  if (length(x) < 2) return(NA_real_)
+  m <- mean(x, na.rm = TRUE)
+  if (!is.finite(m) || m == 0) return(NA_real_)
+  100 * sd(x, na.rm = TRUE) / m
+}
+
+within_cv_safe <- function(x, groups) {
+  x <- as.numeric(x)
+  ok <- is.finite(x) & !is.na(groups)
+  x <- x[ok]
+  g <- droplevels(groups[ok])
+  
+  if (length(x) < 2) return(NA_real_)
+  
+  cvs <- tapply(x, g, function(v) {
+    v <- v[is.finite(v)]
+    if (length(v) < 2) return(NA_real_)
+    m <- mean(v, na.rm = TRUE)
+    if (!is.finite(m) || m == 0) return(NA_real_)
+    100 * sd(v, na.rm = TRUE) / m
+  })
+  
+  if (all(is.na(cvs))) NA_real_ else mean(cvs, na.rm = TRUE)
+}
+
+fmt1 <- function(x) ifelse(is.finite(x), sprintf("%.1f", x), "NA")
+
+# Excel writer (3 decimals formatting)
+write_table_3dp <- function(df, out_path, sheet = "Sheet1") {
+  wb <- createWorkbook()
+  addWorksheet(wb, sheet)
+  writeData(wb, sheet, df)
+  
+  numStyle3 <- createStyle(numFmt = "0.000")
+  num_cols <- which(vapply(df, is.numeric, logical(1)))
+  if (length(num_cols) > 0) {
+    addStyle(
+      wb, sheet, style = numStyle3,
+      rows = 2:(nrow(df) + 1),
+      cols = num_cols,
+      gridExpand = TRUE, stack = TRUE
+    )
+  }
+  
+  setColWidths(wb, sheet, cols = 1:ncol(df), widths = "auto")
+  saveWorkbook(wb, out_path, overwrite = TRUE)
+}
+
+# ---------- NORMALISE (qcrlscR LOESS) ----------
+dat_corr <- qc.rlsc.wrap(
+  dat    = data_o,
+  cls.qc = cls_qc,
+  cls.bl = cls_bl,
+  method = "divide",
+  intra  = TRUE,
+  opti   = TRUE,
+  log10  = TRUE,
+  outl   = TRUE,
+  shift  = FALSE
+)
+rownames(dat_corr) <- rownames(data_o)
+
+# ---------- OUTPUTS ----------
+cv_tbl <- data.frame(
+  Feature            = feat_names,
+  CV_all_Raw         = NA_real_,
+  CV_pool_Raw        = NA_real_,
+  CV_all_Corrected   = NA_real_,
+  CV_pool_Corrected  = NA_real_,
+  Diff_CV_all        = NA_real_,
+  Diff_CV_pool       = NA_real_,
+  WithinCV_Raw       = NA_real_,
+  WithinCV_Corrected = NA_real_,
+  Diff_WithinCV      = NA_real_,
+  Improved_both      = FALSE,
+  check.names = FALSE
+)
+
+pdf_out <- file.path(Data_normalisation_dir, "qcrlscR_LOESS_Normalisation.pdf")
+pdf(pdf_out, width = 14, height = 5)
+
+# ---------- LOOP FEATURES (CALC + PLOTS HERE) ----------
+for (feature in feat_names) {
+  
+  raw_vec  <- data_o[[feature]];  names(raw_vec)  <- rownames(data_o)
+  corr_vec <- dat_corr[[feature]]; names(corr_vec) <- rownames(dat_corr)
+  
+  # CVs: non-QC and pool
+  cv_raw_all   <- cv_safe(raw_vec[samp_ids])
+  cv_corr_all  <- cv_safe(corr_vec[samp_ids])
+  cv_raw_pool  <- cv_safe(raw_vec[qc_samples])
+  cv_corr_pool <- cv_safe(corr_vec[qc_samples])
+  
+  # within-group CVs on NON-QC samples
+  wg_raw  <- within_cv_safe(raw_vec[samp_ids],  group_labels_samp)
+  wg_corr <- within_cv_safe(corr_vec[samp_ids], group_labels_samp)
+  
+  # table
+  cv_tbl[cv_tbl$Feature == feature,
+         c("CV_all_Raw","CV_pool_Raw","CV_all_Corrected","CV_pool_Corrected")] <-
+    c(cv_raw_all, cv_raw_pool, cv_corr_all, cv_corr_pool)
+  
+  cv_tbl[cv_tbl$Feature == feature, c("Diff_CV_all","Diff_CV_pool")] <-
+    c(cv_corr_all - cv_raw_all, cv_corr_pool - cv_raw_pool)
+  
+  cv_tbl[cv_tbl$Feature == feature,
+         c("WithinCV_Raw","WithinCV_Corrected","Diff_WithinCV")] <-
+    c(wg_raw, wg_corr, wg_corr - wg_raw)
+  
+  cv_tbl[cv_tbl$Feature == feature, "Improved_both"] <-
+    isTRUE(is.finite(cv_raw_all) && is.finite(cv_corr_all) && is.finite(wg_raw) && is.finite(wg_corr) &&
+             cv_corr_all < cv_raw_all && wg_corr < wg_raw)
+  
+  # ---- FIT LINE SHAPE (consistent with QC-RLSC) ----
+  tmp_raw <- data_o[, feature, drop = FALSE]
+  colnames(tmp_raw) <- "feat"
+  
+  corr1 <- qc.rlsc(
+    x = tmp_raw,
+    y = cls_qc,
+    method = "divide",
+    opti = TRUE
+  )
+  
+  fit_shape <- as.numeric(tmp_raw[, 1] / corr1[, 1])
+  fit_shape[!is.finite(fit_shape)] <- NA_real_
+  
+  # scale to raw intensity scale
+  k <- median(tmp_raw[qc_idx, 1], na.rm = TRUE) / median(fit_shape[qc_idx], na.rm = TRUE)
+  fit_all_raw  <- fit_shape * k
+  fit_all_corr <- rep(median(corr_vec[qc_idx], na.rm = TRUE), nrow(SSF_o))
+  
+  df_plot <- tibble(
+    Sample    = factor(rownames(SSF_o), levels = rownames(SSF_o)),
+    Group     = factor(SSF_o$Conditions, levels = unique(SSF_o$Conditions)),
+    Raw       = raw_vec,
+    Corrected = corr_vec,
+    FitRaw    = fit_all_raw,
+    FitCorr   = fit_all_corr
+  )
+  
+  # subtitles: left=RAW, right=CORRECTED (include pool CV)
+  sub_raw  <- sprintf("Raw: CV(sample)=%s%% | WithinCV=%s%% | CV(pool)=%s%%",
+                      fmt1(cv_raw_all), fmt1(wg_raw), fmt1(cv_raw_pool))
+  sub_corr <- sprintf("Corrected: CV(sample)=%s%% | WithinCV=%s%% | CV(pool)=%s%%",
+                      fmt1(cv_corr_all), fmt1(wg_corr), fmt1(cv_corr_pool))
+  
+  p_raw <- ggplot(df_plot, aes(x = Sample, y = Raw, color = Group)) +
+    geom_point(size = 2) +
+    geom_line(aes(y = FitRaw, group = 1), color = "red", linewidth = 0.8) +
+    scale_color_manual(values = customColors) +
+    scale_y_continuous(limits = c(0, NA)) +
+    labs(title = paste0(feature, " — Raw"), subtitle = sub_raw) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  p_corr <- ggplot(df_plot, aes(x = Sample, y = Corrected, color = Group)) +
+    geom_point(size = 2) +
+    geom_line(aes(y = FitCorr, group = 1), color = "red", linewidth = 0.8) +
+    scale_color_manual(values = customColors) +
+    scale_y_continuous(limits = c(0, NA)) +
+    labs(title = paste0(feature, " — Corrected"), subtitle = sub_corr) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  gridExtra::grid.arrange(p_raw, p_corr, ncol = 2)
+}
+
+dev.off()
+
+# ---------- EXPORT EXCEL (per-feature table) ----------
+cv_outfile <- file.path(Data_normalisation_dir, "qcrlscR_LOESS_CV_summary.xlsx")
+write_table_3dp(cv_tbl, cv_outfile)
+
+# ---------- SUMMARY TABLE (like your three_col_tbl) ----------
+# mean differences vs raw (more negative = better)
+cv_mean_diff_all    <- mean(cv_tbl$Diff_CV_all,    na.rm = TRUE)
+cv_mean_diff_within <- mean(cv_tbl$Diff_WithinCV,  na.rm = TRUE)
+cv_mean_diff_pool   <- mean(cv_tbl$Diff_CV_pool,   na.rm = TRUE)
+
+three_col_tbl <- data.frame(
+  Method         = "qcrlscR_LOESS",
+  CV             = round(cv_mean_diff_all, 4),
+  Within_CV      = round(cv_mean_diff_within, 4),
+  Pool_CV        = round(cv_mean_diff_pool, 4),
+  Improved       = isTRUE(cv_mean_diff_all < 0 & cv_mean_diff_within < 0 & cv_mean_diff_pool < 0),
+  check.names = FALSE
+)
+
+message("Mean difference vs Raw (more negative = better):")
+print(three_col_tbl)
+
+summary_outfile <- file.path(Data_normalisation_dir, "qcrlscR_LOESS_MeanDiff_fromRaw_CVtable.xlsx")
+write_table_3dp(three_col_tbl, summary_outfile)
+
+# ---------- corrected matrix (optional) ----------
+corr_outfile <- file.path(Data_normalisation_dir, "qcrlscR_LOESS_corrected_matrix_3dp.xlsx")
+write_table_3dp(
+  df = as.data.frame(round(dat_corr, 3)) %>% tibble::rownames_to_column("Sample"),
+  out_path = corr_outfile
+)
+
+message("Saved PDF: ", pdf_out)
+message("Saved CV table: ", cv_outfile)
+message("Saved summary table: ", summary_outfile)
+message("Saved corrected matrix (3dp): ", corr_outfile)
+
+# bring back order
+data_list[[1]] <- dat_corr[rownames(SSF),]
+```
+
+    
+#2.3. Missing value imputation
+```{r} 
+#### Make preMVI boxplots ---------------
+Metab_AllValuePLots <- list()
+for (metab in colnames(rbind(data_list[[1]], data_list[[2]]))) {   # metab = colnames(data)[1]
+  # Merge metabolite values with metadata
+  plotdata <- merge(rbind(data_list[[1]], data_list[[2]]) %>% select(all_of(metab)),  rbind(SSF_list[[1]], SSF_list[[2]]), by = 0)
+  
+  # Ensure RunOrder is numeric and sort
+ # plotdata <- plotdata[order(plotdata$RunOrder), ]
+  
+  # Make Row.names a factor ordered by RunOrder
+  plotdata$Row.names <- factor(plotdata$Row.names, levels = plotdata$Row.names)
+  
+  # Plot with Colors column used for custom colors but Conditions for legend
+  p <- ggplot(plotdata, aes(x = Row.names, y = .data[[metab]], fill = Conditions)) +
+    geom_col(position = "dodge") +
+    scale_fill_manual(values = setNames(plotdata$Color, plotdata$Conditions)) + # map colors
+    labs(title = paste(metab),
+         x = "Samples (Run Order)", y = "Intensity") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 6),  # rotate x labels
+          plot.title = element_text(size = 14))
+  
+  # Store plot
+  Metab_AllValuePLots[[metab]] <- p
+}
+
+# Save blank Bar-plots
+AllValueBoxplotPreMVIloc <- file.path(output.dir,paste0("Metabolite_AllValues_preMVI_boxplots.pdf"))
+pdf(AllValueBoxplotPreMVIloc, width = 14, height = 8) # Adjust width and height as needed
+
+# Iterate over the list of plots and print each one
+for (plot in Metab_AllValuePLots) {
+  print(plot)
+}
+
+# Close the PDF device
+dev.off()
+    
+
+### ----------------- Missign Value Imputation ------------------
+for(i in 1:length(SSF_list)){ #i=1
+  # Dataset selection
+  SSF = SSF_list[[i]]
+  data = data_list[[i]]
+  if(i==1){
+    outname<- "sample_"
+  }else{
+    outname<- "ctrl_"
+  }
+  
+  MVI_data <- data 
+  SSF <- SSF[match(rownames(MVI_data), rownames(SSF)), ]
+  halfmin <- min(MVI_data[MVI_data>0], na.rm = T)/2
+  # Because of the loess correction we have zeros and negative values along with the NAs we set them all to zero.
+  # MVI_data[MVI_data <halfmin] <- 0
+  # MVI_data[is.na(MVI_data)] <- 0
+  
+  for (feature  in colnames(MVI_data)){ # feature =  colnames(MVI_data)[3]
+    feature_data <- merge(MVI_data[feature] , SSF %>% select("Conditions"), by= 0, sort = FALSE)
+    feature_data <- column_to_rownames(feature_data, "Row.names")
+    feature_data[feature_data==0] <- NA
+    
+    split_Input <- split(feature_data, SSF[,"Conditions"]) # split data frame into a list of data frames by condition
+    
+    for (m in split_Input){ # Select dataframe  # m <- split_Input[[2]]
+      if( sum(is.na(m[,1]))== (length(m[,1])) |  sum(is.na(m[,1]))== (length(m[,1])-1) ){ #  if  all is NA or we have only 1 value then put 0 in whole group 
+        set.seed(1234)
+        for (value in  1:length( MVI_data[rownames(MVI_data) %in% rownames(m),feature])){ # value = 1
+          MVI_data[rownames(MVI_data) %in% rownames(m),feature][value] <- halfmin + sample(100:1000, 1, replace = TRUE)
+        }
+      }else{ # if we have more than 1 value
+        MVI_data[rownames(MVI_data) %in% rownames(m),feature][is.na(m[,1])]<- mean(m[,1],na.rm = TRUE )
+      }
+    }
+  }   
+  
+  # set.seed(123) # Set seed for reproducibility
+  # MVI_data[MVI_data == 0] <- 1 + runif(sum(MVI_data == 0), min = 0.01, max = 0.1)
+  
+  # PCA
+  make_pca_grid(MVI_data, SSF, add_to_name =  paste0("7. ",outname,"Imputed"))
+  make_signal_drift_reports(MVI_data, SSF, add_to_name =  paste0("7. ",outname,"Imputed"))
+  
+  data_list[[i]] <- MVI_data
+}
+
+
+
+###  Make postMVI boxplots -------------------
+Metab_AllValuePLots <- list()
+for (metab in colnames(rbind(data_list[[1]], data_list[[2]]))) {   # metab = colnames(data)[1]
+  # Merge metabolite values with metadata
+  plotdata <- merge(rbind(data_list[[1]], data_list[[2]]) %>% select(all_of(metab)),  rbind(SSF_list[[1]], SSF_list[[2]]), by = 0)
+  
+  # Ensure RunOrder is numeric and sort
+ # plotdata <- plotdata[order(plotdata$RunOrder), ]
+  
+  # Make Row.names a factor ordered by RunOrder
+  plotdata$Row.names <- factor(plotdata$Row.names, levels = plotdata$Row.names)
+  
+  # Plot with Colors column used for custom colors but Conditions for legend
+  p <- ggplot(plotdata, aes(x = Row.names, y = .data[[metab]], fill = Conditions)) +
+    geom_col(position = "dodge") +
+    scale_fill_manual(values = setNames(plotdata$Color, plotdata$Conditions)) + # map colors
+    labs(title = paste(metab),
+         x = "Samples (Run Order)", y = "Intensity") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 6),  # rotate x labels
+          plot.title = element_text(size = 14))
+  
+  # Store plot
+  Metab_AllValuePLots[[metab]] <- p
+}
+
+# Save blank Bar-plots
+AllValueBoxplotPreMVIloc <- file.path(output.dir,paste0("Metabolite_AllValues_postMVI_boxplots.pdf"))
+pdf(AllValueBoxplotPreMVIloc, width = 14, height = 8) # Adjust width and height as needed
+
+# Iterate over the list of plots and print each one
+for (plot in Metab_AllValuePLots) {
+  print(plot)
+}
+
+# Close the PDF device
+dev.off()
+
+paste("#2.3. Missing value imputation Finished!")
+```
+
+
+# CoRe normalisation using media blanks
+```{r}
+# -------------------- SETUP --------------------
+norm_dir <- file.path(Data_normalisation_dir)
+if (!dir.exists(norm_dir)) dir.create(norm_dir, recursive = TRUE)
+
+if (CoRe == TRUE) {
+  
+
+  # -------------------- INPUT --------------------
+  media_blank_data <- data_list[[2]]
+  media_blank_ssf  <- SSF_list[[2]]
+  
+  sample_data <- data_list[[1]]
+  sample_ssf  <- SSF_list[[1]]
+  
+  # Keep SSF aligned to sample_data rows
+  common_samples <- intersect(rownames(sample_data), rownames(sample_ssf))
+  sample_data <- sample_data[common_samples, , drop = FALSE]
+  sample_ssf  <- sample_ssf[common_samples, , drop = FALSE]
+  
+  # -------------------- BLANK MEANS (per blank condition) --------------------
+  blank_levels <- unique(media_blank_ssf$Conditions)
+  
+  blank_means <- sapply(blank_levels, function(g) {
+    colMeans(media_blank_data[media_blank_ssf$Conditions == g, , drop = FALSE], na.rm = TRUE)
+  })
+  
+  blank_means_df <- as.data.frame(t(blank_means))
+  rownames(blank_means_df) <- blank_levels
+  
+  # IMPORTANT: do NOT convert NA -> 0 here (hides missing blank info)
+  
+  # -------------------- MATCHING: sample condition -> blank condition --------------------
+  pick_blank_group <- function(sample_cond, blank_levels) {
+    sample_cond  <- as.character(sample_cond)
+    blank_levels <- as.character(blank_levels)
+    
+    if (is.na(sample_cond) || !nzchar(sample_cond)) return(NA_character_)
+    
+    s  <- tolower(sample_cond)
+    bl <- tolower(blank_levels)
+    
+    if (s %in% bl) return(blank_levels[match(s, bl)])
+    
+    hits <- which(vapply(bl, function(b) grepl(b, s, fixed = TRUE) || grepl(s, b, fixed = TRUE), logical(1)))
+    
+    if (length(hits) == 1) return(blank_levels[hits])
+    
+    if (length(hits) > 1) {
+      lens <- nchar(bl[hits])
+      return(blank_levels[hits[which.max(lens)]])
+    }
+    
+    NA_character_
+  }
+  
+  # -------------------- SUBTRACT BLANK MEANS --------------------
+  sample_data_corrected <- as.data.frame(
+    matrix(NA_real_, nrow = nrow(sample_data), ncol = ncol(sample_data),
+           dimnames = list(rownames(sample_data), colnames(sample_data)))
+  )
+  
+  for (i in seq_len(nrow(sample_data))) {
+    
+    cond <- sample_ssf$Conditions[i]
+    
+    # If pool: keep as NA (or keep original), but your later code removes pools anyway
+    if (!is.na(cond) && tolower(cond) == "pool") {
+      sample_data_corrected[i, ] <- NA_real_
+      next
+    }
+    
+    bg <- pick_blank_group(cond, rownames(blank_means_df))
+    
+    if (is.na(bg)) {
+      warning(sprintf("No blank group match for sample condition: %s (row %d). Setting row to NA.", cond, i))
+      sample_data_corrected[i, ] <- NA_real_
+      next
+    }
+    
+    # subtract; keeps NA where sample has NA
+    sample_data_corrected[i, ] <- sample_data[i, ] - blank_means_df[bg, ]
+  }
+  
+  # -------------------- AMOUNT NORMALISATION (multiply by 1/amount) --------------------
+  SSF <- sample_ssf
+  
+  # SSF$Amount_numeric <- suppressWarnings(as.numeric(SSF$`Amount of Material`))
+  # amounts <- SSF$Amount_numeric
+  # names(amounts) <- rownames(SSF)
+  # amounts[is.na(amounts) | amounts == 0] <- 1
+  # amounts <- 1 / amounts
+  
+  # align amounts to corrected matrix rows
+  # amounts <- amounts[rownames(sample_data_corrected)]
+  # amounts[is.na(amounts)] <- 1
+  # 
+  # # multiply each row by amounts (your intended behaviour)
+  # sample_data_corrected <- as.data.frame(sweep(sample_data_corrected, 1, amounts, FUN = "*"))
+  
+    # align growth table to data by rownames
+  gf <- ssf_for_growth_factor[rownames(sample_data_corrected), "Cell Count at Experimental End Point"]
+
+  # n_cells_at_start <- 500000
+  # 
+  # gf <- gf/n_cells_at_start 
+  
+  gf[is.na(gf)] <- 1
+
+  
+  # divide each sample (row) by its growth factor
+  sample_data_corrected <- sweep(sample_data_corrected, 1, gf, FUN = "/")
+
+
+  
+  # -------------------- QC PLOTS (RAW vs BLANK MEAN BARS) --------------------
+  pdf(file = file.path(norm_dir, "Media_data_with_CtrlMediaBar2.pdf"), width = 12, height = 5)
+  
+  for (metab in colnames(sample_data_corrected)) {
+    
+    plot_df <- tibble(
+      Sample = rownames(sample_data_corrected),
+      Value  = sample_data[[metab]],          # keeping your original choice (raw shown as points)
+      Group  = SSF$Conditions
+    )
+    
+    blank_df <- tibble(
+      Group_media = rownames(blank_means_df),
+      MeanValue   = blank_means_df[[metab]]
+    ) %>%
+      mutate(Group = gsub("_control$", "_sample", Group_media))
+    
+    p1 <- ggplot() +
+      geom_col(
+        data = blank_df,
+        aes(x = Group, y = MeanValue),
+        fill = "grey", alpha = 0.6
+      ) +
+      geom_jitter(
+        data = plot_df,
+        aes(x = Group, y = Value),
+        width = 0.15, size = 2, colour = "blue", alpha = 0.7
+      ) +
+      theme_bw() +
+      labs(title = metab, x = "Condition", y = "Intensity") +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    
+    print(p1)
+  }
+  
+  dev.off()
+  
+  # -------------------- QC PLOTS (RAW vs BLANK MEAN BARS) - NO POOLS --------------------
+pdf(file = file.path(norm_dir, "Media_data_with_CtrlMediaBar2_noPools.pdf"),
+    width = 12, height = 5)
+
+for (metab in colnames(sample_data_corrected)) {
+
+  plot_df <- tibble::tibble(
+    Sample = rownames(sample_data_corrected),
+    Value  = sample_data[[metab]],          # raw points (as in your original)
+    Group  = SSF$Conditions
+  ) %>%
+    dplyr::filter(!is.na(Group)) %>%
+    dplyr::filter(!grepl("pool", Group, ignore.case = TRUE))  # <-- remove pools
+
+  blank_df <- tibble::tibble(
+    Group_media = rownames(blank_means_df),
+    MeanValue   = blank_means_df[[metab]]
+  ) %>%
+    dplyr::mutate(Group = gsub("_control$", "_sample", Group_media))
+
+  # keep only x categories that actually appear (either as sample points or blank bars)
+  x_levels <- union(unique(plot_df$Group), unique(blank_df$Group))
+  plot_df$Group  <- factor(plot_df$Group, levels = x_levels)
+  blank_df$Group <- factor(blank_df$Group, levels = x_levels)
+
+  p1 <- ggplot2::ggplot() +
+    ggplot2::geom_col(
+      data = blank_df,
+      ggplot2::aes(x = Group, y = MeanValue),
+      fill = "grey", alpha = 0.6
+    ) +
+    ggplot2::geom_jitter(
+      data = plot_df,
+      ggplot2::aes(x = Group, y = Value),
+      width = 0.15, size = 2, colour = "blue", alpha = 0.7
+    ) +
+    ggplot2::theme_bw() +
+    ggplot2::labs(title = metab, x = "Condition", y = "Intensity") +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+
+  print(p1)
+}
+
+dev.off()
+  
+  # ---------- CoRe plotting: corrected data only (no grey bars), zero dotted line ----------
+  pdf(file = file.path(norm_dir, "CoRe_CorrectedData_only.pdf"), width = 12, height = 5)
+  
+  # map sample -> condition (safe even if orders differ)
+  cond_map <- SSF$Conditions
+  names(cond_map) <- rownames(SSF)
+  
+  for (metab in colnames(sample_data_corrected)) {
+    
+    plot_df <- tibble::tibble(
+      Sample = rownames(sample_data_corrected),
+      Value  = as.numeric(sample_data_corrected[[metab]])
+    ) %>%
+      dplyr::mutate(Group = unname(cond_map[Sample])) %>%   # <- key fix
+      dplyr::filter(!is.na(Group)) %>%
+      dplyr::filter(!grepl("pool", Group, ignore.case = TRUE))
+    
+    p1 <- ggplot2::ggplot(plot_df, ggplot2::aes(x = Group, y = Value)) +
+      ggplot2::geom_jitter(width = 0.15, size = 2, colour = "blue", alpha = 0.7) +
+      ggplot2::geom_hline(yintercept = 0, linetype = "dotted", colour = "black") +
+      ggplot2::theme_bw() +
+      ggplot2::labs(title = metab, x = "Condition", y = "Corrected intensity") +
+      ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1))
+    
+    print(p1)
+  }
+  
+  dev.off()
+  
+  # -------------------- OUTPUT OBJECTS --------------------
+  
+  # remove pools (as in your code)
+  SSF <- SSF[-grep("Pool", rownames(SSF), ignore.case = TRUE), , drop = FALSE]
+  sample_data_corrected <- sample_data_corrected[-grep("Pool", rownames(sample_data_corrected), ignore.case = TRUE), , drop = FALSE]
+  
+  make_pca_grid(sample_data_corrected, SSF, add_to_name = "7.5 CoRe_BackgroundSubtracted")
+  make_signal_drift_reports(sample_data_corrected, sample_ssf, add_to_name = "7.5 CoRe_BackgroundSubtracted")
+}
+
+###  Make postCoRe norm boxplots -------------------
+Metab_AllValuePLots <- list()
+for (metab in colnames(sample_data_corrected)) {   # metab = colnames(data)[1]
+  # Merge metabolite values with metadata
+  plotdata <- merge(sample_data_corrected %>% select(all_of(metab)),  SSF, by = 0)
+  
+  # Ensure RunOrder is numeric and sort
+ # plotdata <- plotdata[order(plotdata$RunOrder), ]
+  
+  # Make Row.names a factor ordered by RunOrder
+  plotdata$Row.names <- factor(plotdata$Row.names, levels = plotdata$Row.names)
+  
+  # Plot with Colors column used for custom colors but Conditions for legend
+  p <- ggplot(plotdata, aes(x = Row.names, y = .data[[metab]], fill = Conditions)) +
+    geom_col(position = "dodge") +
+    scale_fill_manual(values = setNames(plotdata$Color, plotdata$Conditions)) + # map colors
+    labs(title = paste(metab),
+         x = "Samples (Run Order)", y = "Intensity") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 6),  # rotate x labels
+          plot.title = element_text(size = 14))
+  
+  # Store plot
+  Metab_AllValuePLots[[metab]] <- p
+}
+
+# Save blank Bar-plots
+AllValueBoxplotPreMVIloc <- file.path(output.dir,paste0("Metabolite_AllValues_postCoRenorm_boxplots.pdf"))
+pdf(AllValueBoxplotPreMVIloc, width = 14, height = 8) # Adjust width and height as needed
+
+# Iterate over the list of plots and print each one
+for (plot in Metab_AllValuePLots) {
+  print(plot)
+}
+
+# Close the PDF device
+dev.off()
+
+MVI_data <- sample_data_corrected 
+paste("# CoRe normalisation using media blanks Finished!")
+```
+
+
+### --- 3. Data preparation/finalisation
+#3.0 Preparation
+```{r}
+# Set sub folders
+Data_finalisation_dir <- file.path(output.dir, "3. Data Finalisation")
+if (!dir.exists(Data_finalisation_dir)) dir.create(Data_finalisation_dir, recursive = TRUE)
+
+# Metabolite_Metadata$`SNratio<3` <- rownames(Metabolite_Metadata) %in% gsub("[^A-Za-z0-9 ]", "", names(blank_dominated_features[blank_dominated_features]))
+# Data_cleaning_dir
+# , ProjectCode,"_",Sys.Date(), 
+paste("#3.0 Preparation Finished!")
+```
+
+#3.1 Data transformation
+```{r}
+if(CoRe==F){
+  data <- log2(MVI_data) 
+}else{
+  data <-MVI_data
+}
+# PCA
+PCA_data <- data
+PCA_SSF <- SSF
+make_pca_grid(PCA_data, PCA_SSF, add_to_name = "8. transformed")
+make_signal_drift_reports(PCA_data, PCA_SSF, add_to_name = "8. transformed")
+  
+paste("#3.1 Data transformation Finished!")
+```
+
+#3.2. Outlier samples
+```{r}
+SSFsave <- SSF
+# SSF <- SSFsave
+initial_data <- data
+data_norm <- data
+Outlier_filtering_loop <- 2
+
+sample_outliers <- list()
+outlier_plot_list <- list()
+
+for (loop in 1:Outlier_filtering_loop) {
+  PCA.res <- prcomp(data_norm, center = TRUE, scale. = TRUE)
+  
+  # Scree plot data
+  inflect_df <- data.frame(x = 1:length(PCA.res$sdev))
+  inflect_df$y <- summary(PCA.res)$importance[2, ]
+  inflect_df$Cumulative <- summary(PCA.res)$importance[3, ]
+  screeplot_cumul <- format(round(inflect_df$Cumulative[1:20]*100, 1), nsmall = 1)
+  knee <- inflection::uik(inflect_df$x, inflect_df$y)
+  npcs <- knee - 1
+  if(npcs <= 1) { npcs <- 2 }
+  
+  # Scree plot
+  screeplot <- factoextra::fviz_screeplot(PCA.res, main = paste("PCA Explained variance plot filtering round ", loop),
+                                          addlabels = TRUE, ncp = 20, geom = c("bar", "line"),
+                                          barfill = "grey", barcolor = "grey", linecolor = "black") +
+    theme_classic() +
+    geom_vline(xintercept = npcs + 0.5, linetype = 2, color = "red") +
+    annotate("text", x = 1:20, y = -0.8, label = screeplot_cumul, col = "black", size = 3)
+  
+  
+  outlier_plot_list[[paste0("Scree_", loop)]] <-screeplot
+  
+  
+  # PCA plot PC1 vs PC2
+  pca_df <- data.frame(Sample = rownames(PCA.res$x), PCA.res$x[, 1:2], Group = SSF$Conditions)
+  colnames(pca_df)[2:3] <- c("PC1", "PC2")
+  
+  pc1_var <- round(100 * summary(PCA.res)$importance[2, 1], 1)
+  pc2_var <- round(100 * summary(PCA.res)$importance[2, 2], 1)
+  
+  pca_plot <- ggplot(pca_df, aes(x = PC1, y = PC2, color = Group)) +
+    geom_point(size = 3) +
+    geom_text_repel(aes(label = Sample), size = 3, max.overlaps = 100) +
+    scale_color_manual(values = setNames(SSF$Color, SSF$Conditions)) +
+    labs(title = paste("PCA Score Plot Round", loop),
+         x = paste0("PC1 (", pc1_var, "%)"),
+         y = paste0("PC2 (", pc2_var, "%)")) +
+    theme_classic()
+  
+  outlier_plot_list[[paste0("PCA_", loop)]] <-pca_plot
+  
+  # Hotelling's T2 test
+  data_hot <- PCA.res$x[, 1:npcs]
+  qcc_res <- qcc::mqcc(data_hot, type = "T2.single", labels = rownames(data_hot), confidence.level = 0.99, plot = FALSE)
+  limits <- as.data.frame(qcc_res$limits)
+  t2_data <- data.frame(Samples = names(qcc_res$statistics), Statistic = qcc_res$statistics)
+  outliers <- t2_data[t2_data$Statistic > limits$UCL, , drop = FALSE]
+  
+  # Hotelling plot
+  hotelling_plot <- ggplot(t2_data, aes(x = Samples, y = Statistic)) +
+    geom_point(color = "blue", size = 2) +
+    geom_point(data = outliers, aes(x = Samples, y = Statistic), color = "red", size = 3) +
+    geom_line(group = 1, linetype = 2) +
+    geom_hline(yintercept =limits[1,2], color = "red", linetype = "dashed") +
+    labs(title = paste("Hotelling T2 Test Round", loop), y = "Group Summary Statistic") +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  outlier_plot_list[[paste0("Hotelling_", loop)]] <- hotelling_plot
+  
+  # Remove outliers
+  if (nrow(outliers) == 0) break
+  data_norm <- data_norm[!rownames(data_norm) %in% outliers$Samples, , drop = FALSE]
+  SSF <- SSF[!rownames(SSF) %in% outliers$Samples,]
+  sample_outliers[[paste0("Round_", loop)]] <- outliers$Samples
+}
+
+
+Outlierloc <- file.path(Data_finalisation_dir,paste0("Outlier_testing" ,".pdf"))
+pdf(Outlierloc, width = 8, height = 8) # Adjust width and height as needed
+
+# Iterate over the list of plots and print each one
+for (plot in outlier_plot_list) {
+  print(plot)
+}
+# Close the PDF device
+dev.off()
+
+# Export outliers
+if (length(sample_outliers) > 0) {
+  sink(file.path(Data_finalisation_dir, "Outliers.txt"))
+  print(sample_outliers)
+  sink()
+}
+
+# data_norm <- sample_data_corrected
+
+# # remove manually
+# remove <- "ACNe01_Cells_017"
+# data_norm <- data_norm[!rownames(data_norm) %in% remove, , drop = FALSE]
+# SSF <- SSF[!rownames(SSF) %in% remove,]
+
+# PCA
+PCA_data <- data_norm
+PCA_SSF <- SSF
+res <- make_pca_grid(PCA_data, PCA_SSF, add_to_name = "9. Outlier_removed")
+make_signal_drift_reports(PCA_data, PCA_SSF, add_to_name = "9. Outlier_removed")
+
+paste("#3.2. Outlier samples Finished!")
+```
+
+# Merge technical replicates
+```{r eval=FALSE}
+
+data <- data_norm   # or MVI_data
+SSF2 <- SSF
+
+# align
+common <- intersect(rownames(data), rownames(SSF2))
+data <- data[common, , drop = FALSE]
+SSF2 <- SSF2[common, , drop = FALSE]
+
+# keep factor order
+SSF2$Conditions <- factor(SSF2$Conditions, levels = levels(SSF$Conditions))
+
+# -------------------- MERGE TECH REPS (median) --------------------
+SSF2_tbl <- SSF2 %>% rownames_to_column("SampleID")
+
+merged_tbl <- SSF2_tbl %>%
+  group_by(Conditions, `Biological Replicate`) %>%
+  summarise(
+    merged = list(apply(data[SampleID, , drop = FALSE], 2, median, na.rm = TRUE)),
+    Color  = dplyr::first(Color),
+    .groups = "drop"
+  ) %>%
+  mutate(NewSampleID = paste0(Conditions, "_BioRep", `Biological Replicate`))
+
+merged_data <- do.call(rbind, merged_tbl$merged)
+rownames(merged_data) <- merged_tbl$NewSampleID
+merged_data <- as.data.frame(merged_data)
+
+merged_SSF <- merged_tbl %>%
+  select(NewSampleID, Conditions, `Biological Replicate`, Color) %>%
+  column_to_rownames("NewSampleID")
+
+merged_SSF$Conditions
+
+# -------------------- QC PLOTS (before vs merged) --------------------
+pdf(file.path(output.dir, "Merge_TechReps_QCplots.pdf"), width = 10, height = 6)
+
+for (metab in colnames(data)) {
+  
+  df_raw <- SSF2_tbl %>%
+    mutate(
+      Value = data[SampleID, metab],
+      Type = "Raw"
+    ) %>%
+    select(SampleID, Conditions, `Biological Replicate`, Value, Type)
+  
+  df_merged <- merged_SSF %>%
+    rownames_to_column("SampleID") %>%
+    mutate(
+      Value = merged_data[SampleID, metab],
+      Type = "Merged"
+    ) %>%
+    select(SampleID, Conditions, `Biological Replicate`, Value, Type)
+  
+  df_plot <- bind_rows(df_raw, df_merged) %>%
+    mutate(Type = factor(Type, levels = c("Raw", "Merged")))
+  
+  p <- ggplot(df_plot, aes(x = Type, y = Value, fill = Type)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.6) +
+    geom_jitter(width = 0.15, size = 1.8, alpha = 0.7) +
+    facet_grid(`Biological Replicate` ~ Conditions, scales = "free_y") +
+    theme_bw() +
+    labs(title = metab, x = "", y = "Intensity") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  print(p)
+}
+
+dev.off()
+
+paste("#3.3 Technical Replicate Merging Finished!")
+```
+
+
+#3.3 Finalise data processing
+```{r}
+suppressMessages(in_data <- readxl::read_excel(file_listTF[grep("ssf", tolower(file_listTF), invert = T)], sheet = 1, col_names = T) |> as.data.frame()) # load data file
+rownames(in_data) <- in_data[[1]]   # set first column as row names
+in_data <- in_data[, -1]     
+write.csv(in_data, paste0(Data_finalisation_dir, "/Raw_Data.csv"))
+
+
+processed_data <- data_norm
+#processed_data$`valine-d8` <- NULL
+processed_data <- processed_data[,-grep(valine_pattern_id, tolower(colnames(processed_data)))]
+
+processed_data <- processed_data[!grepl("pool", tolower(rownames(processed_data))),]
+processed_data[sapply(processed_data, is.numeric)] <- round(processed_data[sapply(processed_data, is.numeric)], 3)
+
+out_data <- processed_data
+SSF <- SSF[rownames(out_data),]
+
+write.csv(out_data, paste0(Data_finalisation_dir, "/Processed_Data.csv"))
+
+
+if (exists("merge_tectno_Reps") && isTRUE(merge_tectno_Reps)) {
+  SSF <- merged_SSF
+  
+  processed_data <- data_norm
+#processed_data$`valine-d8` <- NULL
+processed_data <- processed_data[,-grep(valine_pattern_id, tolower(colnames(processed_data)))]
+
+processed_data <- processed_data[!grepl("pool", tolower(rownames(processed_data))),]
+processed_data[sapply(processed_data, is.numeric)] <- round(processed_data[sapply(processed_data, is.numeric)], 3)
+
+out_data <- processed_data
+SSF <- SSF[rownames(out_data),]
+
+write.csv(out_data, paste0(Data_finalisation_dir, "/Processed_Data_unmerged.csv"))
+
+processed_data <- merged_data
+#processed_data$`valine-d8` <- NULL
+processed_data <- processed_data[,-grep(valine_pattern_id, tolower(colnames(processed_data)))]
+
+processed_data <- processed_data[!grepl("pool", tolower(rownames(processed_data))),]
+processed_data[sapply(processed_data, is.numeric)] <- round(processed_data[sapply(processed_data, is.numeric)], 3)
+
+out_data <- processed_data
+merged_SSF <- merged_SSF[rownames(out_data),]
+
+write.csv(out_data, paste0(Data_finalisation_dir, "/Processed_Data.csv"))
+}
+
+# PCA
+PCA_data <- processed_data
+PCA_SSF <- SSF
+res <- make_pca_grid(PCA_data, PCA_SSF, add_to_name = "10. Processed_data")
+
+#make_signal_drift_reports(PCA_data, PCA_SSF, add_to_name = "10. Processed_data")
+
+paste("#3.3 Finalise data processing Finished!")
+```
+
+
+# CHeck if BIOlogical vairation is in first 2 compoents
+```{r eval = FALSE}
+
+# -------------------- INPUT --------------------
+X <- as.matrix(processed_data)          # samples in rows, features in columns
+meta <- SSF                     # sample metadata; rownames must match MVI_data
+
+# keep only common samples + align
+common <- intersect(rownames(X), rownames(meta))
+X <- X[common, , drop = FALSE]
+meta <- meta[common, , drop = FALSE]
+
+# optional: log transform (skip if already log)
+# X <- log10(X + 1)
+
+# remove rows with any NA / Inf
+keep <- is.finite(rowSums(X)) & !apply(X, 1, function(r) any(!is.finite(r)) || any(is.na(r)))
+X <- X[keep, , drop = FALSE]
+meta <- meta[keep, , drop = FALSE]
+
+# -------------------- PCA --------------------
+pca <- prcomp(X, center = TRUE, scale. = TRUE)
+
+scores <- as.data.frame(pca$x[, 1:3])
+scores$Sample <- rownames(scores)
+
+df <- scores %>%
+  left_join(meta %>% rownames_to_column("Sample"), by = "Sample")
+
+# % variance for axis labels
+pc_var <- round(100 * (pca$sdev^2 / sum(pca$sdev^2)), 2)
+
+# -------------------- PLOT --------------------
+p <- ggplot(df, aes(PC1, PC2,
+                    fill  = factor(`Biological Replicate`),
+                    shape = Conditions)) +
+  geom_point(size = 5, stroke = 1, color = "black") +
+  scale_shape_manual(values = rep(c(21,22,23,24,25),
+                                  length.out = length(unique(df$Conditions)))) +
+  guides(
+    fill = guide_legend(override.aes = list(shape = 21, color = "black", size = 5))
+  ) +
+  theme_classic() +
+  labs(
+    fill  = "Biological Replicate",
+    shape = "Condition",
+    x = paste0("PC1 (", pc_var[1], "%)"),
+    y = paste0("PC2 (", pc_var[2], "%)")
+  )
+
+ggsave(file.path(output.dir, "PCA_BiologicalReplicate.svg"),
+       plot = p, width = 12, height = 10)
+```
+
+### ----- 4. Data Visualisations ----- 
+#4.1. Final PCA
+```{r}
+#update frpm original  colors
+customColors <- customColorsBox
+
+data <-processed_data
+
+# --- 1. Define color column and ensure output folder exists ---
+cols_to_color <- colnames(SSF)[1]
+
+# (Optional) skip columns with too many unique values (e.g., IDs)
+# cols_to_color <- cols_to_color[sapply(cols_to_color, function(c)
+#   length(unique(SSF[[c]])) <= 30)]
+
+# Run your function for each SSF column
+for (cc in cols_to_color) {
+  make_pca_grid(
+    data        = data,
+    SSF         = SSF,
+    add_to_name = paste0("Final PCA_by_", cc),
+    project_code= ProjectCode,
+    color_col   = cc,
+    fig_size_cm = c(60, 40)
+  )
+}
+
+
+# --- 3. Perform PCA once on all samples (Pools included) ---
+pca_res <- prcomp(data, scale. = TRUE)
+pca_var_explained <- summary(pca_res)$importance[2, 1:5] * 100  # % for PC1–PC5
+SSF$Label <- gsub(paste0(ProjectCode, "_"), "", rownames(SSF))  # Sample names for plotting
+
+# --- 6. Final PCA plot with PC1 vs PC2 excluding Pools ---
+non_pool <- !grepl("pool", tolower(SSF$Conditions))
+pca_df <- data.frame(pca_res$x[non_pool, 1:2],
+                     Conditions = SSF$Conditions[non_pool],
+                     Label = SSF$Label[non_pool])
+colnames(pca_df)[1:2] <- c("PC1", "PC2")
+
+pc1_var <- round(100 * summary(pca_res)$importance[2, 1], 1)
+pc2_var <- round(100 * summary(pca_res)$importance[2, 2], 1)
+
+# make sure factor levels match palette order (optional but tidy)
+cond_levels <- intersect(unique(pca_df$Conditions), customColors$Conditions)
+pca_df$Conditions <- factor(pca_df$Conditions, levels = cond_levels)
+pal_use <- customColors$Color[match(cond_levels, customColors$Conditions)]
+
+final_pca_plot <- ggplot(pca_df, aes(x = PC1, y = PC2, color = Conditions)) +
+  geom_point(size = 3) +
+  geom_vline(xintercept = 0, color = "black", linewidth = 0.2) +
+  geom_hline(yintercept = 0, color = "black", linewidth = 0.2) +
+  scale_color_manual(values = pal_use) +
+  labs(title = "PCA: PC1 vs PC2 by Condition", x = paste0("PC1 (", pc1_var, "%)"),
+       y = paste0("PC2 (", pc2_var, "%)")) +
+  theme_classic()
+
+
+ggsave(file.path(file.path(output.dir, "PCA_plots"), "Final_PCA_by_Conditions.svg"),
+       plot = final_pca_plot, width = 20, height = 15, units = "cm")
+
+
+# --- Add names to final PCA ---
+
+final_pca_plot <- ggplot(pca_df, aes(x = PC1, y = PC2, color = Conditions)) +
+  geom_point(size = 3) +
+  ggrepel::geom_text_repel(aes(label = Label), size = 3, show.legend = FALSE) +
+  geom_vline(xintercept = 0, color = "black", linewidth = 0.2) +
+  geom_hline(yintercept = 0, color = "black", linewidth = 0.2) +
+  scale_color_manual(values = pal_use) +
+  labs(
+    title = "PCA: PC1 vs PC2 by Condition",
+    x = paste0("PC1 (", pc1_var, "%)"),
+    y = paste0("PC2 (", pc2_var, "%)")
+  ) +
+  theme_classic()
+
+ggsave(file.path(file.path(output.dir, "PCA_plots"), "Final_PCA_by_Conditions_Labeled.svg"),
+       plot = final_pca_plot, width = 20, height = 15, units = "cm")
+paste("#4.1. Final PCA Finished!")
+```
+
+#4.2. Heatmap
+```{r} 
+# Custom scaling function: scale values to [-1, 1]
+scale_to_minus_one_to_one <- function(vec) {
+  if (max(vec, na.rm = TRUE) == min(vec, na.rm = TRUE)) {
+    return(rep(0, length(vec)))  # If constant, return 0s
+  }
+  2 * (vec - min(vec, na.rm = TRUE)) / (max(vec, na.rm = TRUE) - min(vec, na.rm = TRUE)) - 1
+}
+
+# Scale data
+scaled_data <- as.data.frame(lapply(processed_data, scale_to_minus_one_to_one))   # or out_data
+colnames(scaled_data) <- colnames(processed_data)
+rownames(scaled_data) <- rownames(processed_data)
+
+# Remove pools
+# scaled_data <- scaled_data[-grep("pool", tolower(rownames(scaled_data))),]
+
+# --------------------- CHANGED ANNOTATION ONLY ---------------------
+
+# Sample annotation (align to heatmap columns = rownames(scaled_data))
+annotation_col <- data.frame(Condition = SSF$Conditions, row.names = rownames(SSF))
+annotation_col <- annotation_col[rownames(scaled_data), , drop = FALSE]
+annotation_col$Condition <- as.factor(annotation_col$Condition)
+
+# Build color mapping from SSF$Color
+pal_df   <- unique(SSF[, c("Conditions", "Color")])
+cond_pal <- setNames(pal_df$Color, pal_df$Conditions)   # named vector: names = condition, values = color
+
+annotation_colors <- list(Condition = cond_pal)
+
+# ------------------------------------------------------------------
+
+# Feature annotation with safe rownames
+clean_for_match <- function(x) gsub("[*†]", "", x)
+
+orig_names  <- colnames(scaled_data)           # keep symbols for display
+clean_names <- clean_for_match(orig_names)     # remove symbols for matching
+
+# Match to universe
+annotation_row <- data.frame(MainClass = universe$`Main.class`)
+rownames(annotation_row) <- universe$`Input.name`
+annotation_row <- annotation_row[clean_names, , drop = FALSE]
+
+# Assign original names with symbols as rownames (display)
+rownames(annotation_row) <- orig_names
+
+# Ensure annotation_row only contains rows matching the final matrix
+annotation_row <- annotation_row[colnames(scaled_data), , drop = FALSE]
+
+# Plot
+svg(paste0(output.dir, "/Heatmap_scaled.svg"), width = 10, height = 22)
+set.seed(1234)
+pheatmap(
+  mat = t(as.matrix(scaled_data)),
+  clustering_method = "ward.D2",
+  clustering_distance_rows = "euclidean",
+  clustering_distance_cols = "euclidean",
+  annotation_col = annotation_col,
+  annotation_row = annotation_row,
+  annotation_colors = annotation_colors,
+  main = "Metabolite heatmap",
+  angle_col = 45,
+  fontsize_col = 8,
+  fontsize_row = 6
+)
+dev.off()
+
+# ---------------- HEATMAP 2 (samples grouped by SSF$Conditions levels) ----------------
+
+# enforce group order = factor levels
+annotation_col$Condition <- factor(annotation_col$Condition, levels = levels(SSF$Conditions))
+
+# order samples by Condition, keeping within-group order as-is
+ord <- order(annotation_col$Condition)
+scaled_data2 <- scaled_data[ord, , drop = FALSE]
+annotation_col2 <- annotation_col[ord, , drop = FALSE]
+
+svg(paste0(output.dir, "/Heatmap_Unclustered_Condition.svg"), width = 10, height = 22)
+set.seed(1234)
+pheatmap(
+  mat = t(as.matrix(scaled_data2)),
+  cluster_rows = TRUE,     # <-- only change: remove row clustering too
+  cluster_cols = FALSE,
+  clustering_method = "ward.D2",
+  clustering_distance_rows = "euclidean",
+  # clustering_distance_cols = "euclidean",
+  annotation_col = annotation_col2,
+  annotation_row = annotation_row,
+  annotation_colors = annotation_colors,
+  main = "Metabolite heatmap Unclustered Conditions",
+  angle_col = 45,
+  fontsize_col = 8,
+  fontsize_row = 6
+)
+dev.off()
+
+paste("#4.2. Heatmap Finished!")
+
+```
+
+#4.3. Boxplots
+```{r} 
+Box_data <- processed_data #processed_data # the log2 data --> out_data
+
+Box_data <- merge( SSF %>%select(Conditions),Box_data, by=0)
+Box_data <- column_to_rownames(Box_data, "Row.names")
+Box_data <- Box_data[!grepl("Pool", Box_data$Conditions),]
+Box_data$Conditions <- factor(Box_data$Conditions,levels =   unique(unique(SSF$Conditions)  )) # Merge for boxplots we use the SSSF check it out its potential reason for error!!
+boxplot_colors <- customColorsBox[match(levels(Box_data$Conditions), customColorsBox$Conditions), ]
+
+plot_list <- list()
+for (i in 2:ncol(Box_data)){ # i=4
+  message( colnames(Box_data[i]))
+  
+  boxplotdata <- Box_data %>%  select(i,1) %>%                       
+    group_by(Conditions)
+  NAMES <- names(boxplotdata)[1]
+  message("working metabolite: ",NAMES)
+  names(boxplotdata)[1] <- c("Intensity")
+  
+  
+  extract <- boxplotdata %>% as.data.frame()
+  extract$Intensity <- as.numeric(extract$Intensity)
+  
+  #extract$Conditions <- factor(extract$Conditions, levels = names(boxplot_colors))
+  box_base <- ggbetweenstats(data = extract,
+                             x = Conditions,
+                             y = Intensity,
+                             bf.message = FALSE,
+                             title = paste(NAMES),
+                             results.subtitle = FALSE,
+                             pairwise.comparisons = FALSE,
+                             pairwise.display = "none",
+                             ylab = "normalised intensity"
+  )
+  
+  # Force y-axis to start at 0
+  boxplot <- box_base +
+    geom_hline(yintercept = 0, colour = "black", linetype = "dotted") +
+    ggplot2::scale_color_manual(values = c(boxplot_colors$Color))+
+    # Unsilence the line below to stop forcing zero on y
+    #scale_y_continuous(limits = range(extract$Intensity, na.rm = TRUE))+
+    theme(
+      plot.title = element_text(size = 22),
+      plot.subtitle = element_text(size = 10),
+      legend.title = element_text(size = 20),
+      legend.text = element_text(size = 20),
+      axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 10)
+    )
+
+  
+
+  
+  plot_list[NAMES][[1]] <- boxplot #final_plot 
+}
+
+
+Boxplotloc <- file.path(output.dir,paste0("Boxplots_Y=0" ,".pdf"))
+pdf(Boxplotloc, width = 8, height = 8) # Adjust width and height as needed
+
+# Iterate over the list of plots and print each one
+for (plot in plot_list) {
+  print(plot)
+}
+
+# Close the PDF device
+dev.off()
+
+
+
+plot_list <- list()
+for (i in 2:ncol(Box_data)){ # i=4
+  message( colnames(Box_data[i]))
+  
+  boxplotdata <- Box_data %>%  select(i,1) %>%                       
+    group_by(Conditions)
+  NAMES <- names(boxplotdata)[1]
+  message("working metabolite: ",NAMES)
+  names(boxplotdata)[1] <- c("Intensity")
+  
+  
+  extract <- boxplotdata %>% as.data.frame()
+  extract$Intensity <- as.numeric(extract$Intensity)
+  
+  #extract$Conditions <- factor(extract$Conditions, levels = names(boxplot_colors))
+  box_base <- ggbetweenstats(data = extract,
+                             x = Conditions,
+                             y = Intensity,
+                             bf.message = FALSE,
+                             title = paste(NAMES),
+                             results.subtitle = FALSE,
+                             pairwise.comparisons = FALSE,
+                             pairwise.display = "none",
+                             ylab = "normalised intensity"
+  )
+  
+  # Force y-axis to start at 0
+  boxplot <- box_base +
+    geom_hline(yintercept = 0, colour = "black", linetype = "dotted") +
+    ggplot2::scale_color_manual(values = c(boxplot_colors$Color))+
+    # Unsilence the line below to stop forcing zero on y
+    scale_y_continuous(limits = range(extract$Intensity, na.rm = TRUE))+
+    theme(
+      plot.title = element_text(size = 22),
+      plot.subtitle = element_text(size = 10),
+      legend.title = element_text(size = 20),
+      legend.text = element_text(size = 20),
+      axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 10)
+    )
+
+  
+
+  
+  plot_list[NAMES][[1]] <- boxplot #final_plot 
+}
+
+
+Boxplotloc <- file.path(output.dir,paste0("Boxplots" ,".pdf"))
+pdf(Boxplotloc, width = 8, height = 8) # Adjust width and height as needed
+
+# Iterate over the list of plots and print each one
+for (plot in plot_list) {
+  print(plot)
+}
+
+# Close the PDF device
+dev.off()
+paste("#4.3. Boxplots Finished!")
+```
+
+
+
+### ------ 5. Data Analysis ------
+#5.1.DMA and Ora parameter setting
+```{r}
+DMA_dir <- file.path(output.dir, "4. DMA")
+if (!dir.exists(DMA_dir)) dir.create(DMA_dir, recursive = TRUE)
+
+unique(SSF$Conditions[match(rownames(processed_data), rownames(SSF))])
+# 3. Get two groups
+group1 <-"Type_2"   # Change as needed
+group2 <- "Vehicle"   # Change as needed
+
+comp_name <- paste0(group1, "_Vs_", group2)
+
+subdir_path <- file.path(DMA_dir, comp_name)
+# 2. Create the subdirectory if it doesn't exist
+if (!dir.exists(subdir_path)) {
+  dir.create(subdir_path, recursive = TRUE)
+}
+# 3. Set as working directory
+setwd(subdir_path)
+```
+
+# t-test
+```{r}
+# 1. Log2 transform the data
+#dma_data <- log2(processed_data)
+dma_data <- processed_data
+
+# 2. Match sample conditions
+Conditions <- SSF$Conditions[match(rownames(dma_data), rownames(SSF))]
+
+# 4. Filter sample indices
+idx1 <- which(Conditions == group1)
+idx2 <- which(Conditions == group2)
+
+# 5. Perform t-test for each metabolite
+results <- apply(dma_data, 2, function(x) {
+  x1 <- x[idx1]
+  x2 <- x[idx2]
+  
+  if(CoRe==T){
+    mean1 <- mean(x1, na.rm = TRUE)
+    mean2 <- mean(x2, na.rm = TRUE)
+    
+    NA0 <- any(x1 == 0, na.rm = TRUE) | any(x2 == 0, na.rm = TRUE)
+    
+    if(abs(mean1 - mean2)<=1){
+      log2dist <- 0.1
+    }else{
+      log2dist <- log2(abs(mean1 - mean2))
+    }
+
+    if (abs(mean1) > abs(mean2)) log2dist <- log2dist * 1
+    if (abs(mean1) < abs(mean2)) log2dist <- log2dist * -1
+    
+    if (mean1 > 0 & mean2 > 0) core_spec <- "Released"
+    else if (mean1 < 0 & mean2 < 0) core_spec <- "Consumed"
+    else if (mean1 > 0 & mean2 < 0) core_spec <- paste("Released in", group1, "and Consumed", group2)
+    else if (mean1 < 0 & mean2 > 0) core_spec <- paste("Consumed in", group1, "and Released", group2)
+    else core_spec <- "No Change"
+    
+    core_class <- ifelse(core_spec == "Released", "Released",
+                         ifelse(core_spec == "Consumed", "Consumed", "Released/Consumed"))
+    
+    pval <- tryCatch(t.test(x1, x2)$p.value, error = function(e) NA)
+    
+    return(c(Log2_Distance = log2dist,
+             p.val = pval,
+             CoRe_specific = core_spec,
+             CoRe = core_class,
+             Mean_group1 = mean1,
+             Mean_group2 = mean2))
+  }else{
+    pval <- tryCatch(t.test(x1, x2)$p.value, error = function(e) NA)
+    log2FC <- mean(x1, na.rm = TRUE) - mean(x2, na.rm = TRUE)
+    c(log2FC = log2FC, p.val = pval)
+  }
+  
+})
+
+# 6. Build final dataframe
+DMA_results_df <- as.data.frame(t(results))
+DMA_results_df$feature <- rownames(DMA_results_df)
+DMA_results_df$p.adjusted <- p.adjust(DMA_results_df$p.val, method = "fdr")
+
+# 7. Prepare output and save
+if(CoRe==T){
+  DMA_results_df <- DMA_results_df[, c("feature", "Log2_Distance", "p.val", "p.adjusted", "CoRe_specific", "CoRe",          "Mean_group1" ,  "Mean_group2" )]
+  colnames(DMA_results_df)[1] <- "Metabolite"
+  DMA_results_df$Log2_Distance <- as.numeric(DMA_results_df$Log2_Distance)
+  #DMA_results_df[] <- lapply(DMA_results_df, function(x) if(is.numeric(x)) round(x, 4) else x)
+  #
+ # DMA_results_df[sapply(DMA_results_df, is.numeric)] <- round(DMA_results_df[sapply(DMA_results_df, is.numeric)], 8)
+  DMA_results_df$Log2_Distance <- round(DMA_results_df$Log2_Distance, 3)
+  write.csv(DMA_results_df, file = file.path(subdir_path, paste0("CoRe_t.test_", comp_name, ".csv")), row.names = FALSE)
+  
+}else{
+  DMA_results_df <- DMA_results_df[, c("feature", "log2FC", "p.val", "p.adjusted")]
+  colnames(DMA_results_df)[1] <- "Metabolite"
+  #DMA_results_df[] <- lapply(DMA_results_df, function(x) if(is.numeric(x)) round(x, 4) else x)
+  #DMA_results_df[sapply(DMA_results_df, is.numeric)] <- round(DMA_results_df[sapply(DMA_results_df, is.numeric)], 8)
+  
+  # num_mat <- as.matrix(DMA_results_df[sapply(DMA_results_df, is.numeric)])
+  # min_val <- min(num_mat[num_mat > 0], na.rm = TRUE)
+  # dec <- ceiling(-log10(min_val))
+  # DMA_results_df[sapply(DMA_results_df, is.numeric)] <- round(DMA_results_df[sapply(DMA_results_df, is.numeric)], dec)
+
+
+  DMA_results_df$log2FC <- round(DMA_results_df$log2FC, 3)
+  write.csv(DMA_results_df, file = file.path(paste0(subdir_path, "/t.test_",comp_name,".csv")), row.names = FALSE)
+}
+
+
+DMA_results_df$feature <- DMA_results_df$Metabolite
+DMA_results_df$p.val <- as.numeric(DMA_results_df$p.val)
+
+```
+
+# p Cut off selection
+```{r}
+DMA_results_df$neglog10_pval <- -log10(DMA_results_df$p.adjusted)
+
+fc_cutoff <- 0.5
+pval_cutoff =0.05
+
+
+p.cutoff_selection <- ggplot(DMA_results_df, aes(x = reorder(feature, neglog10_pval), y = neglog10_pval)) +
+  geom_col(fill = "darkred") +
+  geom_hline(yintercept = c(-log10(0.05), -log10(0.01), -log10(0.001), -log10(pval_cutoff)), 
+             linetype = "dashed", color = "blue") +
+  geom_smooth(method = "lm", formula = y ~ poly(x, 2), se = FALSE, color = "blue", size = 1) +  # Quadratic fit
+  annotate("text", x = Inf, y = -log10(0.05), label = "p = 0.05", hjust = 12, vjust = -0.3, color = "blue") +
+  annotate("text", x = Inf, y = -log10(0.01), label = "p = 0.01", hjust = 12, vjust = -0.3, color = "blue") +
+  annotate("text", x = Inf, y = -log10(0.001), label = "p = 0.001", hjust = 10.4, vjust = -0.3, color = "blue") +
+  annotate("text", x = Inf, y = -log10(pval_cutoff), label = paste0("p = ", pval_cutoff), hjust = 14.1, vjust = -0.3, color = "red") +
+  labs(title = "-log10(p-value) by Feature", x = "Metabolite", y = "-log10(p-value)") +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    panel.grid.major.x = element_blank()
+  )
+
+p.cutoff_selection
+
+ggsave(paste0(subdir_path, "/p.adj_cutoff_selection.svg"), plot = p.cutoff_selection, width = 10, height = 8)
+
+
+# 
+# # Order data by p-value
+# DMA_results_df <- DMA_results_df[order(DMA_results_df$neglog10_pval), ]
+# DMA_results_df$feature <- factor(DMA_results_df$feature, levels = DMA_results_df$feature)
+# DMA_results_df$feature_index <- seq_len(nrow(DMA_results_df))  # numeric for fitting
+# 
+# ggplot(DMA_results_df, aes(x = feature, y = neglog10_pval)) +
+#   geom_col(fill = "darkred") +
+#   geom_line(aes(x = feature, y = predict(lm(neglog10_pval ~ poly(feature_index, 2), data = DMA_results_df))),
+#             color = "black", size = 1, group = 1) +
+#   geom_hline(yintercept = c(-log10(0.001), -log10(0.01), -log10(0.05), -log10(x)),
+#              linetype = "dashed", color = "blue") +
+#   annotate("text", x = 1, y = -log10(0.001), label = "p = 0.001", hjust = -0.2, color = "blue") +
+#   annotate("text", x = 1, y = -log10(0.01),  label = "p = 0.01",  hjust = -0.2, color = "blue") +
+#   annotate("text", x = 1, y = -log10(0.05),  label = "p = 0.05",  hjust = -0.2, color = "blue") +
+#   annotate("text", x = 1, y = -log10(x),     label = "p = 0.1",   hjust = -0.2, color = "red") +
+#   labs(title = "-log10(p-value) by Feature with Quadratic Fit",
+#        x = "Metabolite", y = "-log10(p-value)") +
+#   theme(
+#     axis.text.x = element_blank(),
+#     axis.ticks.x = element_blank(),
+#     panel.grid.major.x = element_blank()
+#   )
+
+
+
+```
+
+# Volcanos 
+```{r}
+# Assuming your results are in a data.frame like this:
+# DMA_results_df: columns = feature, log2FC, p.val, p.adjusted
+
+if(CoRe==T){
+  
+  DMA_results_df$Significance <- ifelse(DMA_results_df$p.adjusted < pval_cutoff &
+                                          abs(DMA_results_df$Log2_Distance) > fc_cutoff,
+                                        ifelse(DMA_results_df$Log2_Distance > 0, "Up", "Down"),
+                                        "NS")
+  
+  #DMA CORE PLOT
+  p2 <-ggplot(DMA_results_df, aes(x = Log2_Distance, y = neglog10_pval, color = CoRe)) +
+    geom_point(size = 2) +
+    geom_text_repel(
+      data = subset(DMA_results_df, Significance != "NS"),
+      aes(label = feature),
+      size = 3,
+      max.overlaps = 50,
+      box.padding = 0.3,
+      segment.color = "grey50"
+    ) +
+    geom_hline(yintercept = -log10(pval_cutoff), linetype = "dashed", color = "black") +
+    geom_vline(xintercept = c(-fc_cutoff, fc_cutoff), linetype = "dashed", color = "black") +
+    scale_color_manual(values = c(
+      "Released" = "blue",
+      "Consumed" = "green",
+      "Released/Consumed" = "purple",
+      "No Change" = "grey"
+    )) +
+    labs(
+      title = paste(group1, "vs", group2),
+      x = "Log2 Distance",
+      y = "-Log10 Adjusted p-value"
+    ) +
+    theme_minimal(base_size = 14)
+  
+  
+  ggsave(file.path(subdir_path, paste0("Volcano_CoRe_", comp_name, ".svg")), plot = p2, width = 10, height = 8)
+  
+  # DMA CORE ZOOMED PLOT
+  p2_zoom <- ggplot(DMA_results_df, aes(x = Log2_Distance, y = neglog10_pval, color = CoRe)) +
+    geom_point(size = 2) +
+    geom_text_repel(
+      data = subset(DMA_results_df, Significance != "NS"),
+      aes(label = feature),
+      size = 3,
+      max.overlaps = 50,
+      box.padding = 0.3,
+      segment.color = "grey50"
+    ) +
+    geom_hline(yintercept = -log10(pval_cutoff), linetype = "dashed", color = "black") +
+    geom_vline(xintercept = c(-fc_cutoff, fc_cutoff), linetype = "dashed", color = "black") +
+    scale_color_manual(values = c(
+      "Released" = "blue",
+      "Consumed" = "green",
+      "Released/Consumed" = "purple",
+      "No Change" = "grey"
+    )) +
+    labs(
+      title = paste(group1, "vs", group2),
+      x = "Log2 Distance",
+      y = "-Log10 Adjusted p-value"
+    ) +
+    theme_minimal(base_size = 14)
+  
+  ggsave(file.path(subdir_path, paste0("Volcano_CoRe_", comp_name, "_ZOOM.svg")),
+         plot = p2_zoom,  width = 28, height = 18, limitsize = FALSE)
+  
+  
+  
+  
+  #DMA CORE PLOT
+  p1 <-ggplot(DMA_results_df, aes(x = Log2_Distance, y = neglog10_pval)) +
+    geom_point(aes(color = Significance), size = 2) +
+    geom_text_repel(
+      data = subset(DMA_results_df, Significance != "NS"),
+      aes(label = feature),
+      size = 3,
+      max.overlaps = 50,
+      box.padding = 0.3,
+      segment.color = "grey50"
+    ) +
+    geom_hline(yintercept = -log10(pval_cutoff), linetype = "dashed", color = "black") +
+    geom_vline(xintercept = c(-fc_cutoff, fc_cutoff), linetype = "dashed", color = "black") +
+    scale_color_manual(values = c("Up" = "red", "Down" = "blue", "NS" = "grey")) +
+    labs(
+      title = paste(group1, "vs", group2),
+      x = "Log2 Distance",
+      y = "-Log10 Adjusted p-value",
+      color = "Regulation"
+    ) +
+    theme_minimal(base_size = 14)
+  
+  
+  ggsave(file.path(subdir_path, paste0("Volcano_", comp_name, ".svg")), plot = p1,width = 10, height = 8)
+  
+  # DMA CORE ZOOMED PLOT
+  p1_zoom <- ggplot(DMA_results_df, aes(x = Log2_Distance, y = neglog10_pval)) +
+    geom_point(aes(color = Significance), size = 2) +
+    geom_text_repel(
+      data = subset(DMA_results_df, Significance != "NS"),
+      aes(label = feature),
+      size = 3,
+      max.overlaps = 50,
+      box.padding = 0.3,
+      segment.color = "grey50"
+    ) +
+    geom_hline(yintercept = -log10(pval_cutoff), linetype = "dashed", color = "black") +
+    geom_vline(xintercept = c(-fc_cutoff, fc_cutoff), linetype = "dashed", color = "black") +
+    scale_color_manual(values = c("Up" = "red", "Down" = "blue", "NS" = "grey")) +
+    labs(
+      title = paste(group1, "vs", group2),
+      x = "Log2 Distance",
+      y = "-Log10 Adjusted p-value",
+      color = "Regulation"
+    ) +
+    theme_minimal(base_size = 14)
+  
+  ggsave(file.path(subdir_path, paste0("Volcano_", comp_name, "_ZOOM.svg")),
+         plot = p1_zoom,  width = 28, height = 18, limitsize = FALSE)
+  
+  
+  
+  ###### note core
+}else{
+  VolcanoPlot <- EnhancedVolcano(
+    DMA_results_df,
+    lab = DMA_results_df$feature,
+    x = 'log2FC',
+    y = 'p.adjusted',
+    title = paste0(gsub("_", " ", comp_name)),
+    subtitle = 'Differential Metabolite Analysis (t-test)',
+    xlab = bquote(~Log[2]~Fold~Change),
+    ylab = bquote(~-Log[10]~Adjusted~p~value),
+    pCutoff = pval_cutoff,
+    FCcutoff = fc_cutoff,
+    pointSize = 2.5,
+    labSize = 3,
+    colAlpha = 1,
+    legendPosition = 'right',
+    drawConnectors = T,
+    ylim = c(0, max_y <- ceiling(max(-log10(DMA_results_df$p.adjusted), na.rm = TRUE) + 0.5))
+  )
+  
+  
+  ggsave(paste0(subdir_path, "/Volcano_",comp_name,".svg"), plot = VolcanoPlot, width = 10, height = 8)
+  
+  
+  
+  ##ZOOMED volcano
+  VolcanoPlot <- EnhancedVolcano(
+    DMA_results_df,
+    lab = DMA_results_df$feature,
+    x = 'log2FC',
+    y = 'p.adjusted',
+    title = paste0(gsub("_", " ", comp_name)),
+    subtitle = 'Differential Metabolite Analysis (t-test)',
+    xlab = bquote(~Log[2]~Fold~Change),
+    ylab = bquote(~-Log[10]~Adjusted~p~value),
+    pCutoff = pval_cutoff,
+    FCcutoff = fc_cutoff,
+    pointSize = 2.1,
+    labSize = 5,
+    colAlpha = 1,
+    legendPosition = 'right',
+    arrowheads = FALSE,
+    drawConnectors = T,
+    ylim = c(0, max_y <- ceiling(max(-log10(DMA_results_df$p.adjusted), na.rm = TRUE) + 0.5))
+  )
+  # Save plot
+  ggsave(paste0(subdir_path, "/Volcano_",comp_name,"_ZOOM.svg"), plot = VolcanoPlot, width = 50, height = 32,limitsize = FALSE)
+  
+}
+
+
+```
+
+#Pathview
+```{r}
+if(CoRe==FALSE){
+  Pathview_dir <- file.path(output.dir, "6. Pathview")
+if (!dir.exists(Pathview_dir)) dir.create(Pathview_dir, recursive = TRUE)
+
+subdir_path <- file.path(Pathview_dir, comp_name)
+# 2. Create the subdirectory if it doesn't exist
+if (!dir.exists(subdir_path)) {
+  dir.create(subdir_path, recursive = TRUE)
+}
+# 3. Set as working directory
+setwd(subdir_path)
+
+rownames(universe) <- universe$Input.name
+tmp <- merge(DMA_results_df,    universe%>% select(KEGG_ID),by=0)
+fc_vector <- setNames(tmp$log2FC, tmp$KEGG_ID)
+# Clean up NA values in your fc_vector
+fc_vector <- fc_vector[!is.na(fc_vector)]
+# List of KEGG pathway IDs
+kegg_paths <- c(
+  "hsa00010", "hsa00030", "hsa00020", "hsa00190",
+  "hsa00250", "hsa00330", "hsa00260", "hsa00280",
+  "hsa00230", "hsa00240", "hsa00480", "hsa00760", "hsa00520"
+)
+
+path_names <- c(
+  hsa00010 = "Glycolysis",
+  hsa00030 = "Pentose_Phosphate",
+  hsa00020 = "TCA",
+  hsa00190 = "OxPhos",
+  hsa00250 = "Ala_Asp_Glu",
+  hsa00330 = "Arg_Pro",
+  hsa00260 = "Gly_Ser_Thr",
+  hsa00280 = "Val_Leu_Ile",
+  hsa00230 = "Purine",
+  hsa00240 = "Pyrimidine",
+  hsa00480 = "Glutathione",
+  hsa00760 = "Nicotinate",
+  hsa00520 = "Amino_Sugar"
+)
+
+
+for (path_id in names(path_names)) {
+  pathview(
+    cpd.data = fc_vector,
+    pathway.id = path_id,
+    species = "hsa",
+    kegg.native = TRUE,
+    out.suffix = path_names[[path_id]],
+    cpd.idtype = "kegg"
+  )
+}
+
+## remove unsessesary files
+files <- list.files()
+# Pattern: ends with number(s), dot, and exactly 3 lowercase letters
+pattern <- "\\d+\\.[a-z]{3}$"
+# Find matching files
+files_to_remove <- files[grepl(pattern, files)]
+# Remove them
+file.remove(files_to_remove)
+
+}
+```
+
+# Ora
+```{r}
+Ora_dir <- file.path(output.dir, "5. ORA")
+if (!dir.exists(Ora_dir)) dir.create(Ora_dir, recursive = TRUE)
+
+rm(mSet)
+subdir_path <- file.path(Ora_dir, comp_name)
+# 2. Create the subdirectory if it doesn't exist
+if (!dir.exists(subdir_path)) {
+  dir.create(subdir_path, recursive = TRUE)
+}
+# 3. Set as working directory
+setwd(subdir_path)
+
+# Make a list of metabs
+if(CoRe==T){
+  ora_list <- DMA_results_df %>% filter(abs(Log2_Distance)>0.5 & p.adjusted<pval_cutoff) %>% select(feature)  %>% unlist() %>% as.vector()
+}else{
+  ora_list <- DMA_results_df %>% filter(abs(log2FC)>0.5 & p.adjusted<pval_cutoff) %>% select(feature)  %>% unlist() %>% as.vector()
+}
+# Remove any asterisks
+ora_list <- gsub("\\*", "", ora_list)
+ora_list <- gsub("†", "", ora_list)
+
+ora_list <- gsub(  "CAR 3:0 Propionylcarnitine", "Propionylcarnitine", ora_list)
+ora_list <- gsub( "CAR 6:0 Hexanoylcarnitine" , "Hexanoylcarnitine", ora_list)
+
+ora_list <- ora_list %>% na.omit()
+
+#ora_list <- gsub("-", " ", ora_list)
+checkdf <- data.frame(ora_list)
+
+name <- comp_name
+
+# Create vector consisting of compounds for enrichment analysis 
+tmp.vec <- ora_list
+
+# Create mSetObj
+mSet<-InitDataObjects("conc", "msetora", FALSE, default.dpi = 300)
+
+#Set up mSetObj with the list of compounds
+mSet<-Setup.MapData(mSet, tmp.vec);
+
+# Cross reference list of compounds against libraries (hmdb, pubchem, chebi, kegg, metlin)
+mSet<-CrossReferencing(mSet, "name");
+
+# Create the mapping results table
+mSet<-CreateMappingResultTable(mSet)
+
+Check <- read.csv(file.path(subdir_path, "name_map.csv"))
+if(length(Check$Match[!is.na(Check$Match)])>5){
+  # Set the metabolite filter
+  mSet<-SetMetabolomeFilter(mSet, F);
+  
+  # # Select metabolite set library, refer to 
+  # mSet<-SetCurrentMsetLib(mSet, "smpdb_pathway", 0); #kegg_pathway or smpdb_pathway
+  # # Calculate hypergeometric score, results table generated in your working directory
+  # mSet<-CalculateHyperScore(mSet)
+  # or this
+  # Initialize mSetObj for offline mode
+  mSet <- InitDataObjects("conc", "msetora", FALSE, default.dpi = 300)  # Set TRUE for offline mode
+  
+  # Set pathway library location
+  mSet <- SetCurrentMsetLib(mSet, "smpdb_pathway", 0)  # Replace "kegg_pathway" as needed
+  
+  # Load your pathway data locally
+  # Ensure pathway files are downloaded and accessible in the working directory
+  mSet <- CalculateHyperScore(mSet)
+  
+  ora_mat <-as.data.frame( mSet$analSet$ora.mat)
+  # Add enrichment ratio column
+  ora_mat$EnrichmentRatio <- ora_mat$hits / ora_mat$expected
+  
+  mSet$analSet$ora.mat <- ora_mat
+  
+  # Order by enrichment ratio (descending)
+  mSet$analSet$ora.mat <- mSet$analSet$ora.mat[order(mSet$analSet$ora.mat$EnrichmentRatio, decreasing = TRUE), ]
+  
+  
+  # Plot the ORA, bar-graph
+  mSet<-PlotORA(mSet, paste0("Plot_ORA_",comp_name,"_smpdb_pathway_"), "bar", "pdf", 72, width=NA)
+  
+  OraRes <- mSet$analSet$ora.mat %>% as.data.frame()
+  # OraRes <- rownames_to_column(OraRes, "Pathway")
+  # writexl::write_xlsx(OraRes, paste0(name,"_OraRes.xlsx"))
+  rm(mSet)
+  
+  # find metabs to select
+  dt_saved <- qs::qread("smpdb_pathway.qs")
+  writexl::write_xlsx(dt_saved, paste0("Path-Metab_assignment",comp_name,".xlsx"))
+  
+  setwd(ProjectFolder)
+}
+```
+
+
+
+##### TST METAPROVIZ
+```{r}
+library(MetaProViz)
+# MappingInfo <- MetaProViz::ToyData(Data="Cells_MetaData")
+DMA_Annova <-  MetaProViz::dma(data=processed_data,
+                               metadata_sample=SSF,
+                               metadata_info = c(Conditions="Conditions", Numerator=NULL, Denominator = "Vehicle"),
+                               pval ="aov",
+                               padj="fdr",
+                              # metadata_feature = MappingInfo,
+                               core=TRUE)
+
+
+
+# volcano with names
+DMA_Vehicle_vs_Type_1 <-  DMA_Annova[["dma"]][["Vehicle_vs_Type_1"]]
+# Run with default parameter --> only need to provide Input_data and the title we like
+MetaProViz::viz_volcano(data=DMA_Vehicle_vs_Type_1%>%column_to_rownames("Metabolite"),
+                       x= "Log2(Distance)", select_label = NULL)
+
+```
+
+
+### ----------- THE END -----------
+
+
+
+
+
+
+
+
+
+
+# DMA correlation and lolipop
+```{r}
+DMA_dir <- file.path(output.dir, "4. DMA")
+if (!dir.exists(DMA_dir)) dir.create(DMA_dir, recursive = TRUE)
+# Pick your two files manually
+csv_files <- list.files(path = DMA_dir,  pattern = "\\.csv$", full.names = TRUE, recursive = T)
+# Select input files
+# csv_files[1]
+file1 <- csv_files[1]  # or replace with the actual index/name
+# csv_files[2]
+file2 <- csv_files[2]
+
+# Load data
+df1 <- read.csv(file1)
+df2 <- read.csv(file2)
+
+df1_sub <- df1[, c("Metabolite", "Log2_Distance")]
+df2_sub <- df2[, c("Metabolite", "Log2_Distance")]
+
+colnames(df1_sub) <- c("Metabolite", "log2FC_df1")
+colnames(df2_sub) <- c("Metabolite", "log2FC_df2")
+
+
+merged_logFC <- merge(df1_sub, df2_sub, by = "Metabolite")
+
+merged_logFC <- merged_logFC %>%
+  mutate(
+    direction_df1 = sign(log2FC_df1),
+    direction_df2 = sign(log2FC_df2),
+    same_direction = direction_df1 == direction_df2,
+    df2_higher_magnitude = abs(log2FC_df2) > abs(log2FC_df1),
+    highlight = same_direction & df2_higher_magnitude
+  )
+
+
+# DMA_corr_plot <- ggplot(merged_logFC, aes(x = log2FC_df1, y = log2FC_df2)) +
+#   geom_point(aes(color = highlight), size = 2) +
+#   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
+#   labs(
+#     x = paste0("Log2FC_" ,sub(".*t_test_(.*?)\\.csv$", "\\1", file1)),
+#     y = paste0("Log2FC_" ,sub(".*t_test_(.*?)\\.csv$", "\\1", file2)),
+#     title = "Comparison of log2 Fold Changes",
+#     subtitle = paste0("Highlight: Same direction, higher magnitude in: " ,sub(".*t_test_(.*?)\\.csv$", "\\1", file2))
+#   ) +
+#   scale_color_manual(values = c("grey70", "dodgerblue")) +
+#   coord_fixed(xlim = c(-8, 8), ylim = c(-10, 11)) +
+#   theme_minimal() + theme(legend.position = "none")
+# 
+# ggsave(file.path(output.dir, "DMA_correlation_plot.svg"),  plot = DMA_corr_plot, width = 60, height = 40, units = "cm")
+
+colnames(merged_logFC)[2] <- paste0(colnames(merged_logFC)[2],"_" ,sub( ".*t\\.test_([^/]+)\\.csv$", "\\1", file1) )
+colnames(merged_logFC)[3] <- paste0(colnames(merged_logFC)[3],"_" ,sub( ".*t\\.test_([^/]+)\\.csv$", "\\1", file2) )
+colnames(merged_logFC)[7] <- gsub("df2_", paste0(sub(".*t\\.test_([^/]+)\\.csv$", "\\1", file2), "_") ,colnames(merged_logFC)[7]  )
+merged_logFC <- merged_logFC[,-c(4,5,8)]
+
+
+SameDirection <- merged_logFC %>% filter(same_direction == TRUE)
+OppositeDirection <- merged_logFC %>% filter(same_direction != TRUE)
+
+write.csv(merged_logFC, file.path(output.dir, "DMA_correlations_log2FC.csv"), row.names = FALSE)
+
+```
+
+# lolipop
+```{r}
+data <- SameDirection # or OppositeDirection
+# Reshape to long format
+long_df <- data %>%
+  pivot_longer(
+    cols = starts_with("log2FC_"),
+    names_to = "Condition",
+    values_to = "log2FC"
+  )
+
+# Optional: Clean up condition labels
+long_df$Condition <- gsub("log2FC_df1_","", long_df$Condition)
+long_df$Condition <- gsub("log2FC_df2_", "",long_df$Condition)
+
+# Sort metabolites by the Homozygous condition log2FC values
+sorted_metabolites <- data %>%
+  arrange(desc(colnames(data)[2])) %>%
+  pull(Metabolite)
+
+# Reorder the factor levels
+long_df$Metabolite <- factor(long_df$Metabolite, levels = sorted_metabolites)
+
+# Plot
+lolipop <- ggplot(long_df, aes(x = log2FC, y = Metabolite, color = Condition)) +
+  geom_segment(aes(x = 0, xend = log2FC, y = Metabolite, yend = Metabolite),
+               size = 1.2) +
+  geom_point(size = 3) +
+  labs(
+    x = "log2 Distance",
+    y = "Metabolite",
+    title = "Lollipop Plot of Same direction log2 Fold Changes",
+    color = "Condition"
+  ) +
+  theme_minimal()
+
+ggsave(file.path(output.dir, "DMA_lolipop_same_direction.svg"),  plot = lolipop, width = 30, height = 40, units = "cm")
+
+
+data <- OppositeDirection # or OppositeDirection
+# Reshape to long format
+long_df <- data %>%
+  pivot_longer(
+    cols = starts_with("log2FC_"),
+    names_to = "Condition",
+    values_to = "log2FC"
+  )
+
+# Optional: Clean up condition labels
+long_df$Condition <- gsub("log2FC_df1_","", long_df$Condition)
+long_df$Condition <- gsub("log2FC_df2_", "",long_df$Condition)
+
+# Sort metabolites by the Homozygous condition log2FC values
+sorted_metabolites <- data %>%
+  arrange(desc(colnames(data)[2])) %>%
+  pull(Metabolite)
+
+# Reorder the factor levels
+long_df$Metabolite <- factor(long_df$Metabolite, levels = sorted_metabolites)
+
+# Plot
+lolipop <- ggplot(long_df, aes(x = log2FC, y = Metabolite, color = Condition)) +
+  geom_segment(aes(x = 0, xend = log2FC, y = Metabolite, yend = Metabolite),
+               size = 1.2) +
+  geom_point(size = 3) +
+  labs(
+    x = "log2 Distancee",
+    y = "Metabolite",
+    title = "Lollipop Plot of Same direction log2 Fold Changes",
+    color = "Condition"
+  ) +
+  theme_minimal()
+
+ggsave(file.path(output.dir, "DMA_lolipop_Opposite_direction.svg"),  plot = lolipop, width = 30, height = 40, units = "cm")
+```
+
+# mixed models test
+```{r}
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(lme4)
+  library(lmerTest)
+  library(ggplot2)
+  library(ggrepel)
+})
+
+# =========================
+# INPUT OBJECTS YOU HAVE:
+#   SSFsave   (metadata; rownames are sample IDs)
+#   data_norm (matrix/data.frame; rownames are sample IDs)
+# =========================
+
+# ---- settings ----
+fc_cutoff  <- 0.5
+fdr_cutoff <- 0.1
+
+output.dir <- output.dir  # you already have this in your pipeline
+DMA_dir <- file.path(output.dir, "4. DMA_MixedModel_Unmerged")
+dir.create(DMA_dir, recursive = TRUE, showWarnings = FALSE)
+
+# ---- align sample info to data ----
+stopifnot(all(rownames(data_norm) %in% rownames(SSFsave)))
+
+sample_info <- SSFsave[match(rownames(data_norm), rownames(SSFsave)), , drop=FALSE]
+sample_info$sample_id <- rownames(data_norm)
+
+sample_info$Conditions <- factor(sample_info$Conditions)
+sample_info$`Biological Replicate` <- factor(sample_info$`Biological Replicate`)
+sample_info$`Technical Replicate`  <- factor(sample_info$`Technical Replicate`)
+
+# OPTIONAL: if you want log2 scale, uncomment:
+# data_norm <- log2(data_norm)
+
+# =========================
+# function: one contrast
+# =========================
+run_lmer_contrast <- function(mat, sample_info,
+                              group1, group2,
+                              outdir,
+                              fc_cutoff = 0.5,
+                              fdr_cutoff = 0.1) {
+  
+  dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+  
+  # subset samples for the two groups
+  keep <- sample_info$Conditions %in% c(group1, group2)
+  si   <- droplevels(sample_info[keep, ])
+  
+  # set ref so coefficient = group1 - group2
+  si$Conditions <- relevel(factor(si$Conditions), ref = group2)
+  
+  mat_sub <- mat[si$sample_id, , drop = FALSE]
+  
+  # long format
+  df_long <- mat_sub |>
+    as.data.frame() |>
+    tibble::rownames_to_column("sample_id") |>
+    pivot_longer(-sample_id, names_to = "Metabolite", values_to = "value") |>
+    left_join(
+      si |> select(sample_id, Conditions, `Biological Replicate`, `Technical Replicate`),
+      by = "sample_id"
+    )
+  
+  # fit per metabolite
+  res <- df_long |>
+    group_by(Metabolite) |>
+    group_modify(~{
+      d <- .x
+      if (all(is.na(d$value))) return(tibble(log2FC = NA_real_, p.val = NA_real_))
+      
+      # mixed model: tech reps are repeated measures within the same bio replicate
+      fit <- tryCatch(
+        lmer(value ~ Conditions + (1 | `Biological Replicate`), data = d, REML = FALSE),
+        error = function(e) NULL
+      )
+      
+      if (is.null(fit)) {
+        # fallback (rare): use t-test on group means per biological replicate
+        d2 <- d |>
+          group_by(Conditions, `Biological Replicate`) |>
+          summarise(v = mean(value, na.rm=TRUE), .groups="drop")
+        
+        x1 <- d2$v[d2$Conditions == group1]
+        x2 <- d2$v[d2$Conditions == group2]
+        
+        est  <- mean(x1, na.rm=TRUE) - mean(x2, na.rm=TRUE)
+        pval <- tryCatch(t.test(x1, x2)$p.value, error=function(e) NA_real_)
+        return(tibble(log2FC = est, p.val = pval))
+      }
+      
+      coefs <- summary(fit)$coefficients
+      term  <- paste0("Conditions", group1)
+      
+      if (!term %in% rownames(coefs)) return(tibble(log2FC = NA_real_, p.val = NA_real_))
+      
+      tibble(
+        log2FC = unname(coefs[term, "Estimate"]),
+        p.val  = unname(coefs[term, "Pr(>|t|)"])
+      )
+    }) |>
+    ungroup() |>
+    mutate(
+      p.adjusted   = p.adjust(p.val, method = "fdr"),
+      neglog10_fdr = -log10(p.adjusted),
+      Comparison   = paste0(group1, "_Vs_", group2),
+      Significance = case_when(
+        !is.na(p.adjusted) & p.adjusted < fdr_cutoff & abs(log2FC) > fc_cutoff & log2FC > 0 ~ "Up",
+        !is.na(p.adjusted) & p.adjusted < fdr_cutoff & abs(log2FC) > fc_cutoff & log2FC < 0 ~ "Down",
+        TRUE ~ "NS"
+      )
+    )
+  
+  # save csv
+  out_csv <- file.path(outdir, paste0("lmer_", group1, "_Vs_", group2, ".csv"))
+  write.csv(res, out_csv, row.names = FALSE)
+  
+  # volcano
+  p <- ggplot(res, aes(x = log2FC, y = neglog10_fdr)) +
+    geom_point(aes(color = Significance), size = 2) +
+    geom_hline(yintercept = -log10(fdr_cutoff), linetype = "dashed") +
+    geom_vline(xintercept = c(-fc_cutoff, fc_cutoff), linetype = "dashed") +
+    scale_color_manual(values = c(Up="red", Down="blue", NS="grey")) +
+    labs(
+      title = paste0(group1, " vs ", group2),
+      subtitle = "lmer: value ~ Condition + (1|Biological Replicate)",
+      x = "Effect (group1 - group2)",
+      y = "-log10(FDR)"
+    ) +
+    theme_minimal(base_size = 14)
+  
+  p_lab <- p +
+    geom_text_repel(
+      data = res |> filter(Significance != "NS"),
+      aes(label = Metabolite),
+      size = 3,
+      max.overlaps = 50,
+      box.padding = 0.3,
+      segment.color = "grey50"
+    )
+  
+  ggsave(file.path(outdir, paste0("Volcano_lmer_", group1, "_Vs_", group2, ".svg")),
+         plot = p_lab, width = 10, height = 8)
+  
+  ggsave(file.path(outdir, paste0("Volcano_lmer_", group1, "_Vs_", group2, "_ZOOM.svg")),
+         plot = p_lab, width = 28, height = 18, limitsize = FALSE)
+  
+  invisible(res)
+}
+
+# =========================
+# RUN BOTH COMPARISONS
+# =========================
+res_Type1 <- run_lmer_contrast(
+  mat = data_norm,
+  sample_info = sample_info,
+  group1 = "Type_1",
+  group2 = "Vehicle",
+  outdir = file.path(DMA_dir, "Type_1_Vs_Vehicle"),
+  fc_cutoff = fc_cutoff,
+  fdr_cutoff = fdr_cutoff
+)
+
+res_Type2 <- run_lmer_contrast(
+  mat = data_norm,
+  sample_info = sample_info,
+  group1 = "Type_2",
+  group2 = "Vehicle",
+  outdir = file.path(DMA_dir, "Type_2_Vs_Vehicle"),
+  fc_cutoff = fc_cutoff,
+  fdr_cutoff = fdr_cutoff
+)
+
+
+```
+
+
+
+# Session information
+```{r session_info, echo=FALSE}
+options(width = 120)
+sessioninfo::session_info()
+```
+
+# Bibliography
+
