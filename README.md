@@ -10,5 +10,5 @@ HOW TO RUN
   b. Run_order.csv file (the name is irrelevant. It just has to be the only csv file in the 'Inputs' folder).
   c. Data_file.xlsx (name again is irrelevant. It just has to be an excel file without the 'SSF' in its name).
 4. Put the 'Analysis_vXX' folder inside the project folder.
-5. Navigate inside the 'tsatsiki_vXX' folder and open the 'Analysis_vXX.Rmd' file.
+5. Navigate inside the 'Analysis_vXX' folder and open the 'Analysis_vXX.Rmd' file.
 6. Run the Code.
